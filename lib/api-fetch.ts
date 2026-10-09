@@ -1,3 +1,4 @@
+import { sessionFetch } from "./session-context";
 /**
  * 客户端统一请求封装。
  *
@@ -65,7 +66,7 @@ export async function apiFetch<T = any>(
 ): Promise<ApiEnvelope<T>> {
   let res: Response;
   try {
-    res = await fetch(url, init);
+    res = await sessionFetch(url, init);
   } catch (error) {
     // 网络层异常（断网、CORS、超时等）
     return {

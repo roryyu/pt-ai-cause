@@ -1,4 +1,5 @@
 "use client";
+import { sessionFetch } from "@/lib/session-context";
 
 /**
  * 洞察画布列表页：统一承载原 洞察报告 / 看板 / 日报 三模块
@@ -96,7 +97,7 @@ export function InsightsClient() {
   const handleDelete = useCallback(async (id: string) => {
     if (!confirm("确定删除该洞察文档？画布内容与绑定将一并删除。")) return;
     try {
-      await fetch(`/api/v1/insights/${id}`, { method: "DELETE" });
+      await sessionFetch(`/api/v1/insights/${id}`, { method: "DELETE" });
       setDocs((prev) => prev.filter((d) => d.id !== id));
     } catch {
       setError("删除失败");

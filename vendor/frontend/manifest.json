@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-10-09T08:44:10.212Z",
+  "sourceRootCommit": "6f8337f80069678092bbc037a552166f4ed01184",
+  "packages": [
+    {
+      "name": "@pt-ai/bff-auth",
+      "version": "0.8.0",
+      "file": "pt-ai-bff-auth-0.8.0.tgz",
+      "sha256": "91c8da78904a7e84e8ae03db72053fc5818c1193dedf7ab1971fa785726630c0"
+    }
+  ],
+  "releaseManifest": "pt-ai-bff-auth-0.8.0-manifest.json",
+  "sourceRepository": "pt-ai-workspace"
+}

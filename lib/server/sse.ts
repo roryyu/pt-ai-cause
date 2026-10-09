@@ -11,23 +11,30 @@ export type SseSender = (event: unknown) => void;
  * 构造 SSE 响应：streamBody 内通过 send(event) 推送，
  * 事件以 `data: {json}\n\n` 帧格式输出。
  */
-export function sseResponse(streamBody: (send: SseSender) => Promise<void>): Response {
+export function sseResponse(streamBody: (send: SseSender, signal: AbortSignal) => Promise<void>, requestSignal?: AbortSignal): Response {
   const encoder = new TextEncoder();
+  const cancellation = new AbortController();
+  const signal = requestSignal ? AbortSignal.any([requestSignal, cancellation.signal]) : cancellation.signal;
+  let closed = false;
 
   const stream = new ReadableStream({
     async start(controller) {
-      let closed = false;
       const send: SseSender = (event) => {
+        signal.throwIfAborted();
         if (closed) return;
         try {
           controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
         } catch {
           // 客户端断开等场景
           closed = true;
+          cancellation.abort();
         }
       };
       try {
-        await streamBody(send);
+        await streamBody(send, signal);
+      } catch (error) {
+        if (!signal.aborted) controller.error(error);
+        closed = true;
       } finally {
         if (!closed) {
           try {
@@ -38,6 +45,10 @@ export function sseResponse(streamBody: (send: SseSender) => Promise<void>): Res
           closed = true;
         }
       }
+    },
+    cancel() {
+      closed = true;
+      cancellation.abort();
     },
   });
 

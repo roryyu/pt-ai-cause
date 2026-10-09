@@ -32,6 +32,9 @@ REQUIRED=(
   postcss.config.mjs
   prisma/schema.prisma
   prisma/migrations/0_init/migration.sql
+  prisma/migrations/20261009_shared_auth/migration.sql
+  vendor/frontend/manifest.json
+  vendor/frontend/pt-ai-bff-auth-0.8.0.tgz
   app/api/health/route.ts
 )
 MISSING=0
@@ -45,6 +48,25 @@ if [ "$MISSING" -ne 0 ]; then
   echo ">> 基线迁移缺失时，先执行 deploy.md 步骤 0.1–0.2 生成 prisma/migrations/0_init，再重跑本脚本"
   exit 1
 fi
+
+# Release identity must describe the actual tracked source and verified vendor bytes.
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
+    echo "!! 先提交本次源码与 vendor 清单再打包，避免 RELEASE-INFO 的 SHA 与发布内容不一致"
+    exit 1
+  fi
+fi
+node --input-type=module - <<'NODE'
+import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+const manifest = JSON.parse(readFileSync("vendor/frontend/manifest.json", "utf8"));
+const entry = manifest.packages.find(x => x.name === "@pt-ai/bff-auth");
+if (!/^[0-9a-f]{40}$/.test(manifest.sourceRootCommit || "") || !entry || entry.file !== "pt-ai-bff-auth-0.8.0.tgz") throw new Error("Invalid authentication package provenance");
+const bytes = readFileSync("vendor/frontend/" + entry.file);
+if (createHash("sha256").update(bytes).digest("hex") !== entry.sha256) throw new Error("Authentication package SHA-256 mismatch");
+const lock = JSON.parse(readFileSync("package-lock.json", "utf8"));
+if (lock.packages["node_modules/@pt-ai/bff-auth"].integrity !== "sha512-" + createHash("sha512").update(bytes).digest("base64")) throw new Error("Authentication lock integrity mismatch");
+NODE
 
 # ---------- 2. 版本标识与输出路径 ----------
 if git rev-parse --short HEAD >/dev/null 2>&1; then
@@ -76,6 +98,7 @@ TOP_ITEMS=(
   eslint.config.mjs
   skills-lock.json
   prisma
+  vendor
   app
   components
   hooks

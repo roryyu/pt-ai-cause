@@ -1,8 +1,9 @@
+import { AuthError } from "@pt-ai/bff-auth/core";
 import { NextResponse } from "next/server";
 import { ZodError } from "zod";
 
 import { AccessUnavailableError } from "@/lib/server/auth/access-client";
-import { type Actor, getSessionActor } from "@/lib/server/auth/session";
+import { type Actor, requireBusinessSession } from "@/lib/server/auth/session";
 
 /**
  * 统一 API 错误类（项目规范 4.5）
@@ -51,7 +52,7 @@ export async function readJson<T>(request: Request): Promise<T> {
 export async function requireActor(request: Request): Promise<Actor> {
   let actor: Actor | null;
   try {
-    actor = await getSessionActor(request);
+    actor = await requireBusinessSession(request);
   } catch (error) {
     if (error instanceof AccessUnavailableError) {
       throw new ApiError(503, "ACCESS_UNAVAILABLE", error.message, true);
@@ -75,6 +76,7 @@ export function parsePagination(url: string): { skip: number; take: number } {
 /** 统一错误处理（项目规范 4.5：三类错误） */
 export function handleApiError(error: unknown): NextResponse {
   // 1. ApiError → 结构化业务错误
+  if (error instanceof AuthError) error = new ApiError(error.status, error.code, error.message, error.retryable);
   if (error instanceof ApiError) {
     return NextResponse.json(
       {

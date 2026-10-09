@@ -191,9 +191,66 @@ model User {
 }
 
 /// BFF 会话表：id = SHA-256(不透明会话 token)，明文 token 仅存于 httpOnly cookie
+// Shared BFF tables are declared here so Prisma db push cannot drop them as unknown.
+// Their protocol/check constraints remain owned by auth:migrate's shared SQL schema.
+model BrowserAuthBinding {
+  bindingHash String @id @map("binding_hash")
+  epoch BigInt @default(0)
+  currentContextId String? @map("current_context_id")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+  transactions BrowserAuthTransaction[]
+  contexts BrowserAuthContext[]
+  @@map("cause_auth_bindings")
+  @@schema("cause")
+}
+model BrowserAuthTransaction {
+  stateHash String @id @map("state_hash")
+  bindingHash String @map("binding_hash")
+  binding BrowserAuthBinding @relation(fields: [bindingHash], references: [bindingHash], onDelete: NoAction, onUpdate: NoAction)
+  epoch BigInt
+  intent String
+  nonceSecret String? @map("nonce_secret")
+  verifierSecret String? @map("verifier_secret")
+  returnTo String @map("return_to")
+  requireFreshAuth Boolean @default(false) @map("require_fresh_auth")
+  reauthRequestedAt DateTime? @map("reauth_requested_at") @db.Timestamptz(6)
+  expectedSubject String? @map("expected_subject")
+  status String
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(6)
+  claimHash String? @map("claim_hash")
+  processingDeadline DateTime? @map("processing_deadline") @db.Timestamptz(6)
+  failureCode String? @map("failure_code")
+  resultContextId String? @map("result_context_id")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+  @@index([bindingHash, epoch, status], map: "cause_auth_transactions_binding_epoch")
+  @@index([expiresAt], map: "cause_auth_transactions_expiry")
+  @@map("cause_auth_transactions")
+  @@schema("cause")
+}
+model BrowserAuthContext {
+  contextId String @id @map("context_id")
+  bindingHash String @map("binding_hash")
+  binding BrowserAuthBinding @relation(fields: [bindingHash], references: [bindingHash], onDelete: NoAction, onUpdate: NoAction)
+  appSessionRef String @unique @map("app_session_ref")
+  proofHash String @map("proof_hash")
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(6)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  revokedAt DateTime? @map("revoked_at") @db.Timestamptz(6)
+  @@unique([bindingHash, contextId])
+  @@index([bindingHash, revokedAt], map: "cause_auth_contexts_binding")
+  @@map("cause_auth_contexts")
+  @@schema("cause")
+}
+
 model AuthSession {
   id          String    @id // sha256(session token)
   subject     String // Access subject
+  sessionPolicyVersion Int @default(0) @map("session_policy_version")
+  persistenceMode String @default("session") @map("persistence_mode")
+  issuer String?
+  issuerSid String? @map("issuer_sid")
   idleSeconds Int       @default(43200) @map("idle_seconds")
   expiresAt   DateTime  @map("expires_at") @db.Timestamptz(3)
   lastSeenAt  DateTime  @default(now()) @map("last_seen_at") @db.Timestamptz(3)

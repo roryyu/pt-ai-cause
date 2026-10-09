@@ -10,7 +10,7 @@ import { sseResponse } from "@/lib/server/sse";
 import { prisma, Prisma } from "@/lib/db";
 import { newId } from "@/lib/server/ids";
 import { runAgentWorkflow } from "@/lib/server/agents/supervisor";
-import { chatCompletion } from "@/lib/server/model-gateway";
+import { chatCompletion, withModelRequestSignal } from "@/lib/server/model-gateway";
 import {
   CONTEXT_SUMMARY_PROMPT, CONTEXT_SUMMARY_MAX_LENGTH,
   composeContextSummaryInput, fallbackContextSummary,
@@ -63,7 +63,7 @@ export async function POST(request: Request) {
       },
     });
 
-    return sseResponse(async (send) => {
+    return sseResponse((send, signal) => withModelRequestSignal(signal, async () => {
       try {
         const result = await runAgentWorkflow({
           questionId,
@@ -112,9 +112,9 @@ export async function POST(request: Request) {
             data: { status: "failed", answer: { error: errMsg } },
           })
           .catch(() => {});
-        send({ type: "error", message: `Agent 工作流执行失败: ${errMsg}` });
+        if (!signal.aborted) send({ type: "error", message: `Agent 工作流执行失败: ${errMsg}` });
       }
-    });
+    }), request.signal);
   } catch (error) {
     return handleApiError(error);
   }

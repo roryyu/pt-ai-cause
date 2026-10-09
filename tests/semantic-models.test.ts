@@ -20,7 +20,7 @@ vi.mock("@/lib/env", () => ({
 }));
 // 鉴权打桩：BFF 会话链路不在本测试范围，route 层只验证业务行为
 vi.mock("@/lib/server/auth/session", () => ({
-  getSessionActor: vi.fn().mockResolvedValue({
+  requireBusinessSession: vi.fn().mockResolvedValue({
     id: "user_test",
     name: "测试用户",
     email: "test@example.com",

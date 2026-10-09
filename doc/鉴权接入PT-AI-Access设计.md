@@ -1,8 +1,23 @@
 # 归因模块鉴权接入 PT AI Access 详细设计
 
-> 状态：待评审
-> 日期：2026-09-15
+> 状态：本地实施与隔离联调完成；生产验证和上线按平台版本门禁执行
+> 版本：v1.1
+> 日期：2026-10-09
 > 范围：`pt-ai-platform-access`（认证平台侧）+ `pt-ai-acquisition-cause`（归因模块侧）
+
+
+## 当前实施合同（2026-10-09）
+
+本增量覆盖下文 2026-09-15 提案中的认证存储、账号切换、会话策略和全局登出部分；下文保留为历史设计背景。当前平台权威为 Workspace 四应用认证统一基线 v1.2（Cause 增量）及分层会话技术设计 v1.3，不复制 Creative 的业务代码。
+
+- Cause 没有存量用户和业务数据，无需迁移旧 Realm 账号；使用共享 `/realms/pt-ai`、客户端 `pt-ai-cause`。登录 `/api/auth/login`，精确回调 `/api/auth/callback`。
+- 消费 Workspace `@pt-ai/bff-auth` 0.8.0 的 Core/SQL/browser/session-policy；Prisma 仍是连接 owner，事务原子更新 binding、epoch、context、业务 session。旧 Cookie 不作为新会话凭据，旧 OIDC 表保留但停用。
+- 退出是 Cause 本地会话退出，数据库屏障成功后才显示已退出；不调用全局 Keycloak logout 破坏其他应用的 SSO。切换账号必须通过 Identity 原生认证及匹配 SPI；旧页面/写入/流式结果用上下文校验隔离。
+- Access 回调授权实时复核；业务写请求绕过正向缓存，读取最多缓存 60 秒。异常拒绝访问，拒绝后撤销本地会话，禁止在失败时继续使用缓存。Cause 的内部业务角色仍由 Cause 管理。
+- legacy/shadow/enforce 与已部署平台一致。普通应用 normal idle10h/max24h；remember idle30d/max90d，不能超出可信 Identity 周期。后台探测不能续期，enforce 使用专属受限 session-status 客户端。
+- fresh 数据库 `db:deploy`；已有 Prisma 非空数据库由管理员按现有部署历史确认 baseline，再执行幂等 `auth:migrate`。禁止重置/删除卷。共享协议表同时声明于 Prisma schema，避免 `db push` 将其当成未知表删除。
+- 模型全部经过 Foundation：GPT-5.6 Sol、low。配置别名示例 `openai/gpt-5.6-sol`，目标 Agent 授权/模型映射由 Foundation 管理员确认。流式调用原生 Responses，逐条转发 text delta，失败或无 completed 终态视为失败；不伪造流式、不自动重试/回退。LangChain 使用原生 Responses 并显式携带 low，避免带命名空间的别名丢失推理参数。
+- 发布顺序：本地完成验证 → 管理员审核合入 → Foundation/Access/Identity 发布并验证 → Rory 基于确切平台版本验证/发布 Cause。源码/隔离测试/真实付费调用/部署分别记录证据。
 
 ---
 

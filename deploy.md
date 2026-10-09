@@ -6,6 +6,20 @@
 > **服务器命令均不需要 sudo**（ec2-user 已在 docker 组，install.md §7.3 已验证）。
 > 执行回贴时**务必把密钥值打码**（如 `AUTH_SECRET=***(64 chars)**`），长度保留。
 
+
+## 2026-10-09 接入发布门禁（覆盖旧凭据占位部署步骤）
+
+只有平台 Foundation → Access → Identity 已发布、验证且交接精确版本后，Rory 才发布 Cause；本地验证不等于上线。远端代码交付默认 CodeArts，GitHub 仅在明确指定时使用。
+
+- 固定 Node 24.7.0，`npm ci`、`db:generate`、typecheck/test/build 后再打包；发布包必须包括精确 vendor TGZ、`vendor/frontend/manifest.json`、Prisma baseline 与 `prisma/migrations/20261009_shared_auth`。验证 vendor SHA-256 和来源提交，不复制兄弟仓库源码。
+- 生产 `.env` 必须显式填写 `APP_URL=https://cause.pmdevops.com`、`OIDC_ISSUER=https://identity.pmdevops.com/realms/pt-ai`、`OIDC_CLIENT_ID=pt-ai-cause`、新分配的客户端 secret、从 Cause 宿主可达的 Access 内部基址/secret。旧 `/realms/cause` 和聊天中出现过的 secret 不再使用。秘密通过运维受控渠道交付，不写 PR 或文档。
+- Foundation 配置为 `<目标可达Gateway>/openai/v1`、Cause Agent Token、管理员核实的 Sol 模型别名（示例 `openai/gpt-5.6-sol`）；low 由代码显式设置。Agent 需授权该模型、原生 Responses 流式及对应工具调用，预算由平台确定。无自动供应商直连、Luna 回退或付费重试。
+- 会话 `SESSION_POLICY_V1_MODE` 必须与平台已部署模式一致。enforce 需要专用 status 客户端。生产缺少明确认证配置会拒绝启动；下文旧「凭据可后补」和 pending 占位值不再可用作运行配置。
+- 用户确认无存量用户/业务数据，但不要据此假定服务器数据库空。管理员先检查 Prisma 迁移记录/实际 schema：真正空库执行 `db:deploy` 后执行 `auth:migrate`；已通过 db push 建表的非空库，先证明基线一致再按 Prisma baselining 流程标记 `0_init` 已应用，最后执行 `auth:migrate`。不得重置数据库/删除卷，也不要在非空库直接重复执行 0_init。认证增量迁移是幂等、加列建表，不删除旧业务表或旧认证表。
+- 发布后必须验证：真实授权登录、无权限拒绝、停用/撤销权限后的写请求拒绝、切换账号的旧上下文拒绝及旧流终止、跨标签本地退出、过期恢复、原生增量文本和 Sol low 实际调用。真实付费验证按实际授权执行并留证；不要把隔离事件夹具作为 Provider 通过。
+
+详细当前合同见 [Cause 接入设计](doc/鉴权接入PT-AI-Access设计.md)。
+
 ---
 
 ## 0. 本次仓库变更清单（先看，再执行步骤 0）
