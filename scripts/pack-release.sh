@@ -113,8 +113,13 @@ TOP_ITEMS=(
   deploy.md
 )
 for item in "${TOP_ITEMS[@]}"; do
+  # A fresh clone can have no static assets; exports still need the empty skeleton.
+  if [ "$item" = public ] && [ ! -e "$item" ]; then
+    mkdir -p "$STAGE/root/public"
+    continue
+  fi
   if [ ! -e "$item" ]; then
-    echo "!! 打包清单项不存在：$item（清单与仓库现状不一致，请先修正脚本清单）"
+    echo "!! 打包清单项不存在：${item}（清单与仓库现状不一致，请先修正脚本清单）"
     exit 1
   fi
   cp -R "$item" "$STAGE/root/"
@@ -151,7 +156,7 @@ FILES=$(tar -tzf "$ARCHIVE" | wc -l | tr -d ' ')
 
 echo "打包完成"
 echo "  产物   : $ARCHIVE"
-echo "  大小   : $SIZE（$FILES 个条目）"
+echo "  大小   : ${SIZE}（${FILES} 个条目）"
 echo "  sha256 : $SHA"
 echo
 echo "—— 后续操作（deploy.md 步骤 1C）——"
