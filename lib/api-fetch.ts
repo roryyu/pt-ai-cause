@@ -1,4 +1,5 @@
 import { sessionFetch } from "./session-context";
+import { redirectToLoginOnce } from "@pt-ai/bff-auth/browser";
 /**
  * 客户端统一请求封装。
  *
@@ -39,15 +40,11 @@ function httpErrorEnvelope(status: number): ApiEnvelope {
   };
 }
 
-/** 401 跳转去重：并发请求同时失败时只触发一次整页跳转 */
-let redirectingToLogin = false;
-
 /** 会话失效统一处理：整页跳转发起 OIDC 登录，带回跳地址 */
 function redirectToLogin(): void {
-  if (redirectingToLogin || typeof window === "undefined") return;
-  redirectingToLogin = true;
+  if (typeof window === "undefined") return;
   const returnTo = window.location.pathname + window.location.search;
-  window.location.assign(`/api/auth/login?returnTo=${encodeURIComponent(returnTo)}`);
+  redirectToLoginOnce({ loginPath: "/api/auth/login", returnTo });
 }
 
 /**

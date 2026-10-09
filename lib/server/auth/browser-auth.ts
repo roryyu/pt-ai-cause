@@ -101,7 +101,11 @@ export async function requireBusinessSession(request:Request):Promise<Actor> {
   if(!actor)throw new AuthError("session.revoked","session",401);
   requireSessionContext(request.headers,actor.contextId);
   if(request.method!=="GET" && request.method!=="HEAD" && request.headers.get("origin")!==new URL(env.APP_URL).origin)throw new AuthError("auth_origin_invalid","access",403);
-  await query("UPDATE auth_sessions SET last_seen_at=now() WHERE id=(SELECT app_session_ref FROM cause_auth_contexts WHERE context_id=$1) AND last_seen_at<now()-interval '60 seconds'",[actor.contextId]);
-  await causeBrowserAuth().touchIdentity(authRequest(request));
+  if(request.method!=="GET" && request.method!=="HEAD") {
+    // Reads include background progress polling. Only valid mutations and the
+    // explicit, user-driven activity endpoint may advance the activity clocks.
+    await causeBrowserAuth().touchIdentity(authRequest(request));
+    await query("UPDATE auth_sessions SET last_seen_at=now() WHERE id=(SELECT app_session_ref FROM cause_auth_contexts WHERE context_id=$1) AND revoked_at IS NULL AND expires_at>now() AND last_seen_at+idle_seconds*interval '1 second'>now() AND last_seen_at<now()-interval '60 seconds'",[actor.contextId]);
+  }
   return actor;
 }

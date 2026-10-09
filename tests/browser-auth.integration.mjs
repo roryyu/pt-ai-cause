@@ -69,7 +69,14 @@ test('Cause browser login, authorization, context fencing, switch and local logo
   await page.screenshot({path:artifacts+'/cause-native-completed.png'});
   await page.goto(origin+'/');
   const anonymous=await browser.newContext();
-  try { const denied=await anonymous.request.get(origin+'/api/v1/ask');assert.equal(denied.status(),401); }
+  try {
+   const denied=await anonymous.request.get(origin+'/api/v1/ask');assert.equal(denied.status(),401);
+   const guestPage=await anonymous.newPage();const guestErrors=[];let loginRequests=0;
+   guestPage.on('pageerror',error=>guestErrors.push(error.message));
+   guestPage.on('request',request=>{if(new URL(request.url()).pathname==='/api/auth/login')loginRequests++;});
+   await guestPage.goto(origin+'/');await guestPage.waitForURL('**/realms/pt-ai/**');
+   assert.deepEqual(guestErrors,[]);assert.equal(loginRequests,1);
+  }
   finally {await anonymous.close();}
   // Logout must revoke before navigation; an existing sibling page must lose authority.
   const sibling=await context.newPage(); await sibling.goto(origin+'/');

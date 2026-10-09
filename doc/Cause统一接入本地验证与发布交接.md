@@ -10,11 +10,11 @@ Cause 使用共享 `pt-ai` Realm、`pt-ai-cause` Client 和 `cause` Entry。用�
 
 | 范围 | 结果与边界 |
 |---|---|
-| Cause 单元测试 | 188 通过、8 跳过；跳过的是未配置 Adjust 凭据的真实接口测试 |
+| Cause 单元测试 | 191 通过、8 跳过；跳过的是未配置 Adjust 凭据的真实接口测试 |
 | Cause 编译 | Node 24.7.0，Next production build 与类型检查通过；保留原有动态图谱文件 tracing 警告 |
 | Cause lint | 未通过：原有 `lib/api-fetch.ts` 两个默认泛型 `any` 错误仍存在，未关闭规则或扩大类型重构范围；另有原有 warnings |
 | 共享认证 | 全部共享包 build/test 通过；真实 PostgreSQL 事务回归 38 通过，两个浏览器项另外执行；Chrome 记住登录/普通会话持久化 2 通过 |
-| 真实隔离认证 | Keycloak → Access → Cause：授权登录、无权限拒绝、旧 context 写拒绝、跨标签退出、保留 Identity SSO 后主动登录、切换账号通过；正式构建产物也通过同一浏览器套件 |
+| 真实隔离认证 | Keycloak → Access → Cause：授权登录、无权限拒绝、旧 context 写拒绝、跨标签退出、保留 Identity SSO 后主动登录、切换账号通过；匿名业务首页无 JS 异常、只发起一次登录；后台 GET/HEAD 不推进活动时钟；正式构建产物也通过同一浏览器套件 |
 | 撤权/停用 | 合成账号授权后，撤销 entitlement 或停用账号，已有会话下一次写请求立即返回 401，并撤销 Cause session；验证后恢复测试夹具 |
 | 增量流式 | 实际 Cause API 和 Hook，在最终事件被暂缓时已显示第一段文本；完成后第二段出现。Foundation 为隔离 HTTP 夹具，已检查 Sol 别名与 low 请求参数；没有真实 Provider 推理 |
 | Foundation 兼容 | 当前本地源码 `6118c26ce41f428a8078b343d9bd0a3476fe9f1b` 的原生 Responses 流式契约测试 5 通过；Foundation 没有本次源码改动 |

@@ -11,6 +11,7 @@ interface SessionUser {
   role: string;
   contextId: string;
 }
+type SessionSnapshot = { authenticated: false; contextId: null } | ({ authenticated: true } & SessionUser);
 
 export function Topbar() {
   const [user, setUser] = useState<SessionUser | null>(null);
@@ -20,8 +21,8 @@ export function Topbar() {
   // 拉取当前登录身份（未登录时 apiFetch 已统一 401 → 跳登录，此处无需处理）
   useEffect(() => {
     let cancelled = false;
-    apiFetch<SessionUser>("/api/auth/session").then((json) => {
-      if (!cancelled && json.ok) setUser(json.data);
+    apiFetch<SessionSnapshot>("/api/auth/session").then((json) => {
+      if (!cancelled && json.ok) setUser(json.data.authenticated ? json.data : null);
     });
     return () => {
       cancelled = true;
