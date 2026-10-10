@@ -9,11 +9,13 @@ ENV APP_ENV=production
 WORKDIR /app
 
 # 依赖层单独缓存：postinstall 会执行 prisma generate，
-# 因此 prisma.config.ts 与 prisma/schema.prisma 需先于 npm ci 就位
+# 因此 prisma.config.ts 与 prisma/schema.prisma 需先于 npm ci 就位。
+# --include=dev 必须保留：上方 ENV NODE_ENV=production 会使 npm ci 默认省略 devDependencies，
+# 而 next build 构建期需要 @tailwindcss/postcss / typescript 等 devDeps，漏装即报 Cannot find module
 COPY package.json package-lock.json .npmrc prisma.config.ts ./
 COPY prisma ./prisma
 COPY vendor ./vendor
-RUN npm ci
+RUN npm ci --include=dev
 
 # 源码与构建。next build 在构建期会导入服务端模块（lib/env.ts 的 zod 校验 fail-fast），
 # 故为构建层提供可通过校验的占位值；这些值仅存在于该 RUN 层，运行时由容器环境变量覆盖
