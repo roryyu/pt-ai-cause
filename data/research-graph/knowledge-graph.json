@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-09-17T01:17:38.672Z",
+  "updatedAt": "2026-10-10T03:23:21.704Z",
   "nodes": [
     {
       "id": "node_13d37aaf-7229-4c9d-ab47-2cd6e126e87b",
@@ -66,12 +66,13 @@
       "id": "node_ef271bdd-d5d2-40d8-98d2-cf62da7c902d",
       "label": "Adjust",
       "type": "entity",
-      "summary": "研究指出需优先排查Adjust数据接入链路，补全成本、点击、展示、注册、转化等指标；Adjust Fraud Prevention被提及为潜在第三方校验但无详细说明。",
+      "summary": "提供TikTok品类CPI元分析：较基准低40%-65%、辅助安装多19%、卸载率低8%（搜索摘要，待核实）[34]",
       "reportIds": [
         "question_86cf2e8f-5aa2-43b5-8520-da799136912a",
-        "question_40bf3c52-193c-434b-87b0-80bbf0bdc6ce"
+        "question_40bf3c52-193c-434b-87b0-80bbf0bdc6ce",
+        "question_37e8a786-76f5-46bf-aca3-ffb4d94e2374"
       ],
-      "updatedAt": "2026-09-07T06:03:29.884Z"
+      "updatedAt": "2026-10-10T03:23:21.704Z"
     },
     {
       "id": "node_b16b31f5-f2ea-4d6a-aea7-ea0a0af95291",
@@ -605,6 +606,116 @@
         "question_16ceab0a-d65a-4321-95a3-860001c1c962"
       ],
       "updatedAt": "2026-09-17T01:17:38.672Z"
+    },
+    {
+      "id": "node_e80408b5-5978-4636-ba9e-7050e6aa402e",
+      "label": "Meta",
+      "type": "entity",
+      "summary": "FBN系列15个子渠道归因链路已通（FD=2,791）但花费字段未回传，问题大概率在ads_read权限或ETL字段映射环节 [7][8][10][11]",
+      "reportIds": [
+        "question_37e8a786-76f5-46bf-aca3-ffb4d94e2374"
+      ],
+      "updatedAt": "2026-10-10T03:23:21.704Z"
+    },
+    {
+      "id": "node_fdf9a7ab-7990-4b21-ba64-1021abb581cb",
+      "label": "TikTok",
+      "type": "entity",
+      "summary": "2025 Q1流量类CPC $0.01、CTR 4.93%（较Meta高94%）、考虑阶段CPA比Meta低89%；品类CPI较行业基准低40%-65% [28][34]",
+      "reportIds": [
+        "question_37e8a786-76f5-46bf-aca3-ffb4d94e2374"
+      ],
+      "updatedAt": "2026-10-10T03:23:21.704Z"
+    },
+    {
+      "id": "node_bb7d0b01-06d5-4530-ba89-16aba168c85e",
+      "label": "X (Twitter)",
+      "type": "entity",
+      "summary": "渠道命名未匹配且技术文档零覆盖，Conversion API相关检索无任何结果",
+      "reportIds": [
+        "question_37e8a786-76f5-46bf-aca3-ffb4d94e2374"
+      ],
+      "updatedAt": "2026-10-10T03:23:21.704Z"
+    },
+    {
+      "id": "node_934ce571-639b-4795-bba9-0c529827f48c",
+      "label": "Meta Conversions API (CAPI)",
+      "type": "entity",
+      "summary": "事件匹配质量、去重机制、常见断点（token过期、格式不合规、匹配率低）等关键内容在检索材料中完全缺失",
+      "reportIds": [
+        "question_37e8a786-76f5-46bf-aca3-ffb4d94e2374"
+      ],
+      "updatedAt": "2026-10-10T03:23:21.704Z"
+    },
+    {
+      "id": "node_ee0201e3-0919-4a98-abe6-b70b6d0327da",
+      "label": "TikTok Events API",
+      "type": "entity",
+      "summary": "event_id去重、pixel与Events API配合等技术文档未被检索覆盖，材料缺口明确",
+      "reportIds": [
+        "question_37e8a786-76f5-46bf-aca3-ffb4d94e2374"
+      ],
+      "updatedAt": "2026-10-10T03:23:21.704Z"
+    },
+    {
+      "id": "node_8600fc75-b8ea-4294-874a-a575182d65ac",
+      "label": "Metricool",
+      "type": "entity",
+      "summary": "2025 Q1报告覆盖49,417个账户、503,281个广告活动、总投入超1.88亿美元，提供Meta与TikTok分阶段基准对比 [28][29]",
+      "reportIds": [
+        "question_37e8a786-76f5-46bf-aca3-ffb4d94e2374"
+      ],
+      "updatedAt": "2026-10-10T03:23:21.704Z"
+    },
+    {
+      "id": "node_2512f454-6509-4bd7-b018-18c3d1ca63f2",
+      "label": "MMM（营销组合模型）",
+      "type": "entity",
+      "summary": "作为归因数据不完整时的聚合级替代方案被提出，但Meta Robyn、Google Meridian等建模框架的适用性论证在检索中完全缺失 [37]-[48]",
+      "reportIds": [
+        "question_37e8a786-76f5-46bf-aca3-ffb4d94e2374"
+      ],
+      "updatedAt": "2026-10-10T03:23:21.704Z"
+    },
+    {
+      "id": "node_d8f41081-bb57-4913-9518-9d44a131c611",
+      "label": "花费数据缺失与归因链路修复",
+      "type": "topic",
+      "summary": "核心研究问题：在花费字段未回传、渠道命名未匹配的前提下，探索技术修复路径（API断点诊断、权限排查、字段映射）",
+      "reportIds": [
+        "question_37e8a786-76f5-46bf-aca3-ffb4d94e2374"
+      ],
+      "updatedAt": "2026-10-10T03:23:21.704Z"
+    },
+    {
+      "id": "node_ba88ff7b-586f-44e9-9a99-d996522b361f",
+      "label": "跨渠道投放基准对比",
+      "type": "topic",
+      "summary": "基于行业公开数据（CPI/CPA/CPC/CTR/CPM）在漏斗不同阶段对比Meta与TikTok效率，为预算分配提供粗略锚点",
+      "reportIds": [
+        "question_37e8a786-76f5-46bf-aca3-ffb4d94e2374"
+      ],
+      "updatedAt": "2026-10-10T03:23:21.704Z"
+    },
+    {
+      "id": "node_3ed31c20-8c7a-4964-8ae5-4a5192da1129",
+      "label": "聚合级测量替代方法",
+      "type": "topic",
+      "summary": "在用户级归因数据不完整时，MMM或增量测试（Geo-based lift test）能否作为跨渠道预算分配的替代评估手段",
+      "reportIds": [
+        "question_37e8a786-76f5-46bf-aca3-ffb4d94e2374"
+      ],
+      "updatedAt": "2026-10-10T03:23:21.704Z"
+    },
+    {
+      "id": "question_37e8a786-76f5-46bf-aca3-ffb4d94e2374",
+      "label": "在花费数据缺失、归因链路未打通的前提下，探索修复路径、替代评估方法及跨渠道优化的可执行方案",
+      "type": "report",
+      "summary": "花费数据缺失且归因链路未打通时，技术修复路径与MMM替代方法均无有效证据覆盖；2025 Q1基准显示TikTok考虑阶段效率优于Meta，但转化阶段Meta反超，当前仅可做方向性排查与手动导出应急。",
+      "reportIds": [
+        "question_37e8a786-76f5-46bf-aca3-ffb4d94e2374"
+      ],
+      "updatedAt": "2026-10-10T03:23:21.704Z"
     }
   ],
   "edges": [
@@ -1119,6 +1230,94 @@
       "reportIds": [
         "question_16ceab0a-d65a-4321-95a3-860001c1c962"
       ]
+    },
+    {
+      "source": "question_37e8a786-76f5-46bf-aca3-ffb4d94e2374",
+      "target": "node_d8f41081-bb57-4913-9518-9d44a131c611",
+      "relation": "研究涉及",
+      "reportIds": [
+        "question_37e8a786-76f5-46bf-aca3-ffb4d94e2374"
+      ]
+    },
+    {
+      "source": "question_37e8a786-76f5-46bf-aca3-ffb4d94e2374",
+      "target": "node_ba88ff7b-586f-44e9-9a99-d996522b361f",
+      "relation": "研究涉及",
+      "reportIds": [
+        "question_37e8a786-76f5-46bf-aca3-ffb4d94e2374"
+      ]
+    },
+    {
+      "source": "question_37e8a786-76f5-46bf-aca3-ffb4d94e2374",
+      "target": "node_3ed31c20-8c7a-4964-8ae5-4a5192da1129",
+      "relation": "研究涉及",
+      "reportIds": [
+        "question_37e8a786-76f5-46bf-aca3-ffb4d94e2374"
+      ]
+    },
+    {
+      "source": "node_e80408b5-5978-4636-ba9e-7050e6aa402e",
+      "target": "node_d8f41081-bb57-4913-9518-9d44a131c611",
+      "relation": "受…影响（花费=0待排查）",
+      "reportIds": [
+        "question_37e8a786-76f5-46bf-aca3-ffb4d94e2374"
+      ]
+    },
+    {
+      "source": "node_934ce571-639b-4795-bba9-0c529827f48c",
+      "target": "node_e80408b5-5978-4636-ba9e-7050e6aa402e",
+      "relation": "服务于（事件回传接口）",
+      "reportIds": [
+        "question_37e8a786-76f5-46bf-aca3-ffb4d94e2374"
+      ]
+    },
+    {
+      "source": "node_ee0201e3-0919-4a98-abe6-b70b6d0327da",
+      "target": "node_fdf9a7ab-7990-4b21-ba64-1021abb581cb",
+      "relation": "服务于（事件回传接口）",
+      "reportIds": [
+        "question_37e8a786-76f5-46bf-aca3-ffb4d94e2374"
+      ]
+    },
+    {
+      "source": "node_8600fc75-b8ea-4294-874a-a575182d65ac",
+      "target": "node_ba88ff7b-586f-44e9-9a99-d996522b361f",
+      "relation": "提供数据支撑",
+      "reportIds": [
+        "question_37e8a786-76f5-46bf-aca3-ffb4d94e2374"
+      ]
+    },
+    {
+      "source": "node_ef271bdd-d5d2-40d8-98d2-cf62da7c902d",
+      "target": "node_fdf9a7ab-7990-4b21-ba64-1021abb581cb",
+      "relation": "提供品类CPI元分析",
+      "reportIds": [
+        "question_37e8a786-76f5-46bf-aca3-ffb4d94e2374"
+      ]
+    },
+    {
+      "source": "node_fdf9a7ab-7990-4b21-ba64-1021abb581cb",
+      "target": "node_ba88ff7b-586f-44e9-9a99-d996522b361f",
+      "relation": "考虑阶段效率优于Meta",
+      "reportIds": [
+        "question_37e8a786-76f5-46bf-aca3-ffb4d94e2374"
+      ]
+    },
+    {
+      "source": "node_2512f454-6509-4bd7-b018-18c3d1ca63f2",
+      "target": "node_3ed31c20-8c7a-4964-8ae5-4a5192da1129",
+      "relation": "属于",
+      "reportIds": [
+        "question_37e8a786-76f5-46bf-aca3-ffb4d94e2374"
+      ]
+    },
+    {
+      "source": "node_bb7d0b01-06d5-4530-ba89-16aba168c85e",
+      "target": "node_d8f41081-bb57-4913-9518-9d44a131c611",
+      "relation": "受…影响（命名未匹配且文档零覆盖）",
+      "reportIds": [
+        "question_37e8a786-76f5-46bf-aca3-ffb4d94e2374"
+      ]
     }
   ],
   "reports": [
@@ -1163,6 +1362,13 @@
       "objective": "建立面向App端召回充值的流量投放子渠道选择框架，明确高RD/FD、低风险且可扩量的子渠道识别、验证与预算分配方法。",
       "summary": "2026-07后App端召回充值优于Web，PH App RD/FD达61.08%，应以风险清洗、价值评分、增量测试与边际ROAS预算分配选择子渠道。",
       "createdAt": "2026-09-17T01:17:38.672Z"
+    },
+    {
+      "questionId": "question_37e8a786-76f5-46bf-aca3-ffb4d94e2374",
+      "question": "那该如何优化？",
+      "objective": "在花费数据缺失、归因链路未打通的前提下，探索修复路径、替代评估方法及跨渠道优化的可执行方案",
+      "summary": "花费数据缺失且归因链路未打通时，技术修复路径与MMM替代方法均无有效证据覆盖；2025 Q1基准显示TikTok考虑阶段效率优于Meta，但转化阶段Meta反超，当前仅可做方向性排查与手动导出应急。",
+      "createdAt": "2026-10-10T03:23:21.704Z"
     }
   ]
 }
