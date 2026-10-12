@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
+import { sessionFetch } from "@/lib/session-context";
 import {
   applyAgentEvent,
   emptyStreamState,
@@ -29,7 +30,7 @@ export function useAgentStream() {
       setState(emptyStreamState());
 
       try {
-        const res = await fetch(url, {
+        const res = await sessionFetch(url, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(body),

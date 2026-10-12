@@ -1,4 +1,5 @@
 "use client";
+import { sessionFetch } from "@/lib/session-context";
 
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useState } from "react";
@@ -211,7 +212,7 @@ export function ResearchClient({ initialSourceQuestionId }: { initialSourceQuest
 
   /** 删除任务 */
   const removeTask = useCallback(async (taskId: string) => {
-    await fetch(`/api/v1/research/${taskId}`, { method: "DELETE" });
+    await sessionFetch(`/api/v1/research/${taskId}`, { method: "DELETE" });
     if (viewingId === taskId) {
       setMode("create");
       setViewingId(null);

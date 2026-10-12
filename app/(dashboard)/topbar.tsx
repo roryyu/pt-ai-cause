@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Bell, LogOut, Search, User } from "lucide-react";
+import { ArrowRightLeft, Bell, LogOut, Search, User } from "lucide-react";
 import { apiFetch } from "@/lib/api-fetch";
 
 interface SessionUser {
@@ -9,7 +9,9 @@ interface SessionUser {
   name: string;
   email: string;
   role: string;
+  contextId: string;
 }
+type SessionSnapshot = { authenticated: false; contextId: null } | ({ authenticated: true } & SessionUser);
 
 export function Topbar() {
   const [user, setUser] = useState<SessionUser | null>(null);
@@ -19,8 +21,8 @@ export function Topbar() {
   // 拉取当前登录身份（未登录时 apiFetch 已统一 401 → 跳登录，此处无需处理）
   useEffect(() => {
     let cancelled = false;
-    apiFetch<SessionUser>("/api/auth/session").then((json) => {
-      if (!cancelled && json.ok) setUser(json.data);
+    apiFetch<SessionSnapshot>("/api/auth/session").then((json) => {
+      if (!cancelled && json.ok) setUser(json.data.authenticated ? json.data : null);
     });
     return () => {
       cancelled = true;
@@ -40,10 +42,10 @@ export function Topbar() {
   }, [menuOpen]);
 
   const handleLogout = async () => {
-    // 撤销本地会话后，整页跳 identity 登出；identity 不可用时直接落「已退出」态
+    // 只有数据库退出屏障成功后才跳转退出页；其他应用的 Identity SSO 保留。
     const json = await apiFetch<{ logoutUrl: string | null }>("/api/auth/logout", { method: "POST" });
-    const logoutUrl = json.ok ? json.data.logoutUrl : null;
-    window.location.assign(logoutUrl ?? "/login?signedOut=1");
+    if (json.ok) window.location.assign(json.data.logoutUrl ?? "/login?signedOut=1");
+    else { setMenuOpen(false); window.alert(json.error.message ?? "退出未完成，请稍后重试"); }
   };
 
   return (
@@ -131,6 +133,14 @@ export function Topbar() {
                 </div>
               </div>
               <div className="my-1 border-t" style={{ borderColor: "var(--line)" }} />
+              <form action="/api/auth/switch" method="post">
+                <input type="hidden" name="_pt_session_context" value={user.contextId} />
+                <input type="hidden" name="returnTo" value="/" />
+                <button type="submit" className="flex w-full items-center gap-2 rounded-[8px] px-2.5 py-2 text-sm transition-colors hover:bg-black/5">
+                  <ArrowRightLeft size={15} />
+                  切换账号
+                </button>
+              </form>
               <button
                 type="button"
                 onClick={handleLogout}

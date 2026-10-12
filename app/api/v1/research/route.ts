@@ -8,7 +8,7 @@ import { researchSourceContextBlock, graphContextBlock } from "@/lib/server/agen
 import { loadGraph } from "@/lib/server/research-graph/store";
 import { queryGraph } from "@/lib/server/research-graph/query";
 import type { AgentEvent } from "@/lib/server/agents/events";
-import { getDefaultModel } from "@/lib/server/model-gateway";
+import { getDefaultModel, withModelRequestSignal } from "@/lib/server/model-gateway";
 
 export const runtime = "nodejs";
 export const maxDuration = 600;
@@ -101,7 +101,7 @@ export async function POST(request: Request) {
       },
     });
 
-    return sseResponse(async (send) => {
+    return sseResponse((send, signal) => withModelRequestSignal(signal, async () => {
       try {
         send({ type: "meta", questionId, model: getDefaultModel() });
 
@@ -197,9 +197,9 @@ export async function POST(request: Request) {
         await prisma.researchTask
           .update({ where: { id: mainTaskId }, data: { status: "failed", completedAt: new Date() } })
           .catch(() => {});
-        send({ type: "error", message: `深度研究执行失败: ${errMsg}` });
+        if (!signal.aborted) send({ type: "error", message: `深度研究执行失败: ${errMsg}` });
       }
-    });
+    }), request.signal);
   } catch (error) {
     return handleApiError(error);
   }

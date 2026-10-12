@@ -2,22 +2,28 @@
 # pt-ai-acquisition-cause 应用镜像
 # 基座 node:24-bookworm-slim 与 package.json engines 24.7.0 对齐（.npmrc engine-strict）；
 # 目标机 m7g.xlarge 为 arm64，在服务器上原生构建，无需交叉模拟
-FROM node:24-bookworm-slim
+FROM node:24.7.0-bookworm-slim
 
 ENV NODE_ENV=production
+ENV APP_ENV=production
 WORKDIR /app
 
 # 依赖层单独缓存：postinstall 会执行 prisma generate，
 # 因此 prisma.config.ts 与 prisma/schema.prisma 需先于 npm ci 就位
 COPY package.json package-lock.json .npmrc prisma.config.ts ./
 COPY prisma ./prisma
+COPY vendor ./vendor
 RUN npm ci
 
 # 源码与构建。next build 在构建期会导入服务端模块（lib/env.ts 的 zod 校验 fail-fast），
 # 故为构建层提供可通过校验的占位值；这些值仅存在于该 RUN 层，运行时由容器环境变量覆盖
 COPY . .
 RUN APP_ENV=production \
-    APP_URL=http://127.0.0.1:3100 \
+    APP_URL=https://cause.build.invalid \
+    OIDC_ISSUER=https://identity.build.invalid/realms/pt-ai \
+    OIDC_CLIENT_SECRET=build-placeholder \
+    ACCESS_INTERNAL_BASE_URL=http://127.0.0.1:1 \
+    ACCESS_INTERNAL_SECRET=build-placeholder \
     AUTH_SECRET=build-time-placeholder-secret-0123456789abcdef \
     DATABASE_URL=postgresql://build:build@127.0.0.1:5432/build?schema=cause \
     MODEL_GATEWAY_BASE_URL=http://127.0.0.1:1 \

@@ -29,6 +29,9 @@ const ERROR_MESSAGES: Record<string, string> = {
   missing_params: "登录回调参数缺失，请重新登录",
   provider_denied: "已在统一认证页取消登录",
   internal_error: "登录失败，请稍后重试",
+  oidc_transaction_invalid: "登录状态已过期或无效，请重新登录",
+  session_context_changed: "账号状态已更新，请重新确认登录",
+  identity_unavailable: "统一登录服务暂时不可用，请稍后重试",
   login_failed: "登录失败，请稍后重试",
 };
 
@@ -51,7 +54,7 @@ export default async function LoginPage({
 }) {
   const params = await searchParams;
   const signedOut = pick(params, "signedOut") === "1";
-  const errorCode = pick(params, "error");
+  const errorCode = pick(params, "authError") || pick(params, "error");
   const errorMessage = errorCode ? (ERROR_MESSAGES[errorCode] ?? `登录失败（${errorCode}）`) : "";
   const returnTo = safeRelativeReturnTo(pick(params, "returnTo"), "/");
   const loginHref = `/api/auth/login?returnTo=${encodeURIComponent(returnTo)}`;
@@ -59,17 +62,20 @@ export default async function LoginPage({
   // 态 1：已登录直进业务页。探测失败（Access 不可达等）不阻塞渲染——
   // 让错误页/登出页保持可用，比白屏更有价值
   let authenticated = false;
+  let currentContext = "none";
   try {
     const incoming = await headers();
     const probe = new Request("http://local.invalid/login", {
       method: "GET",
       headers: new Headers(incoming),
     });
-    authenticated = Boolean(await getSessionActor(probe));
+    const actor = await getSessionActor(probe);
+    authenticated = Boolean(actor);
+    currentContext = actor?.contextId ?? "none";
   } catch {
     authenticated = false;
   }
-  if (authenticated) redirect(returnTo);
+  if (authenticated && !errorMessage) redirect(returnTo);
 
   // 态 2：无错误、非登出落地 → 自动发起 OIDC，登录页不停留
   if (!signedOut && !errorMessage) redirect(loginHref);
@@ -125,6 +131,11 @@ export default async function LoginPage({
             使用 PT AI 账号登录
           </a>
 
+          <form action="/api/auth/switch" method="post" className="mt-3">
+            <input type="hidden" name="_pt_session_context" value={currentContext} />
+            <input type="hidden" name="returnTo" value={returnTo} />
+            <button type="submit" className="w-full rounded border py-2 text-sm">使用其他账号登录</button>
+          </form>
           <p className="mt-4 text-center text-xs" style={{ color: "var(--muted)" }}>
             登录由 PT AI Access 统一校验账号状态与归因模块访问权限
           </p>

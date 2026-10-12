@@ -26,7 +26,7 @@
 | 样式/UI | Tailwind CSS 4 + Radix UI + lucide-react |
 | 状态/数据 | Zustand（客户端状态）+ SWR（服务端数据）|
 | AI 编排 | LangGraph 1.x（Supervisor 多 Agent 状态图）+ LangChain |
-| 模型接入 | OpenAI SDK（兼容协议），统一模型网关，主备自动降级 |
+| 模型接入 | OpenAI SDK（兼容协议），Foundation 受控网关，Sol low / 原生 Responses 流式 |
 | 数据层 | Prisma 7 + @prisma/adapter-pg + PostgreSQL（schema：`cause`）|
 | 可视化 | Recharts（图表）+ tldraw 5（洞察画布）|
 | 校验 | Zod 4（所有外部输入：请求体 / 环境变量 / 算子参数）|
@@ -48,8 +48,8 @@
 │   connectors/ PG / API / MCP / Web 数据源连接器           │
 │   insights/   洞察画布服务（快照 / 绑定 / 抽取）          │
 │   delivery/   邮件 / 图片投递 + 定时调度                  │
-│   auth/       OIDC BFF（oidc / access-client / session）  │
-│   model-gateway.ts  统一模型网关（主备降级）              │
+│   auth/       OIDC BFF（shared core / access-client / Prisma session）  │
+│   model-gateway.ts  统一模型网关（原生流式）              │
 ├─────────────────────────────────────────────────────────┤
 │ 数据层  prisma/schema.prisma（16 个模型，cause schema）   │
 │         PostgreSQL + pgvector / Redis（预留）             │
@@ -123,7 +123,7 @@ npm install
 # 2. 配置环境变量
 cp .env.example .env
 # 编辑 .env：至少填写 MODEL_GATEWAY_BASE_URL / MODEL_GATEWAY_API_KEY /
-# MODEL_GATEWAY_DEFAULT_MODEL / DATABASE_URL；
+# MODEL_GATEWAY_DEFAULT_MODEL（Sol 别名）/ DATABASE_URL；
 # OIDC_* / ACCESS_* 默认值同时适配本地 pt-access 模拟器与 pt-ai-platform-access 真实环境
 
 # 3. 启动 Access（另开终端，保持运行）——二选一
@@ -174,7 +174,7 @@ npm run i18n:check     # 国际化键值检查      npm run local:down # 停止�
 ## 开发状态
 
 - **已完成**：问答三路径路由与多轮上下文压缩、深度研究算子化链路（SearchOp / ExtractOp / CompareOp）、洞察画布与实时数据绑定、数据源 / 语义层 / 算子管理、定时邮件与图片投递、80 个单元测试全绿、类型检查与 ESLint 零告警
-- **预留/待实施**：企业 SSO 认证（当前 `requireActor` 为开发桩）、看板拖拽深度集成、日报生成逻辑、审计日志面板、Redis 缓存、消息队列异步任务、E2E 测试
+- **预留/待实施**：看板拖拽深度集成、日报生成逻辑、审计日志面板、Redis 缓存、消息队列异步任务、E2E 测试
 
 详细进展见 [doc/开发进度20260827.md](doc/开发进度20260827.md)。
 
@@ -188,3 +188,13 @@ npm run i18n:check     # 国际化键值检查      npm run local:down # 停止�
 | [doc/画布设计.md](doc/画布设计.md) / [doc/问答画布链路打通设计.md](doc/问答画布链路打通设计.md) | 洞察画布与问答→画布链路设计 |
 | [doc/数据源API和MCP的设计.md](doc/数据源API和MCP的设计.md) | 数据源 API 与 MCP 接入设计 |
 | [doc/开发进度*.md](doc/) | 每日开发进度总结 |
+
+## 统一认证与 Foundation 消费
+
+当前实施合同见 [Cause Access 接入设计](doc/鉴权接入PT-AI-Access设计.md)，发布顺序和配置门禁见 [部署手册](deploy.md)。使用 `@pt-ai/bff-auth` 精确 vendor TGZ，登录/回调/退出/切换均由共享 core 处理；业务请求和增量流通过共享 session-context 客户端隔离账号。Cause 只退出自身会话，不全局退出 Identity。
+
+模型消费经过 Foundation，目标 GPT-5.6 Sol、low；原生 Responses 逐段输出文本，必须收到 completed 才成功。示例环境变量给出 Sol 别名，部署管理员须确认目标路由与 Cause Agent 授权。失败没有自动付费重试或备用 Provider。`auth:migrate` 只做保留数据的认证 schema 增量；`db:deploy` 的 fresh/baseline 前提见部署手册。
+
+隔离浏览器验证：预先准备本地 Identity/Access/Cause 和合成账号 JSON（name、subject、accessId），设置 `CAUSE_BROWSER_FIXTURES=<绝对路径>` 后运行 `node --test tests/browser-auth.integration.mjs`；未配置 fixture 时跳过。该套件只允许 localhost/127.0.0.1，使用独立 Chrome context 并自动关闭，不复用用户浏览器状态。
+
+本地验证、已知门禁和双方发布分工见 [本地验证与发布交接](doc/Cause统一接入本地验证与发布交接.md)。
