@@ -2,9 +2,14 @@ import { chatCompletion, chatCompletionStream } from "@/lib/server/model-gateway
 import { runOperator } from "@/lib/server/operators/registry";
 import { extractGraphPatch } from "@/lib/server/research-graph/extractor";
 import { loadGraph, mergeGraph, saveGraph, type MergeStats } from "@/lib/server/research-graph/store";
-import { verifyCitationIntegrity, type CitationReview } from "@/lib/server/research-graph/review";
+import {
+  verifyCitationIntegrity,
+  renumberCitations,
+  remapCitationText,
+  type CitationReview,
+} from "@/lib/server/research-graph/review";
 import type { AgentEvent } from "./events";
-import { PLANNER_PROMPT, EXTRACTOR_PROMPT, REPORT_PROMPT } from "./prompts";
+import { PLANNER_PROMPT, EXTRACTOR_PROMPT, REPORT_PROMPT, KNOWLEDGE_PROMPT } from "./prompts";
 
 /**
  * 深度研究多 Agent 工作流（design.md 4.3.2 研究工作流状态机）
@@ -13,6 +18,9 @@ import { PLANNER_PROMPT, EXTRACTOR_PROMPT, REPORT_PROMPT } from "./prompts";
  *     → Executor（逐子问题：SearchOp 多轮检索 → ExtractOp 深读抽取 → 证据整合）
  *     → Analyzing（CompareOp 多源交叉比对：共识/分歧/置信度）
  *     → Synthesizer（汇总全部证据，流式生成结构化研究报告）
+ *
+ *   内在知识直答通道：Planner 完成后与 Executor 并行发起一次 LLM 直答
+ *   （仅凭训练知识、不联网），成稿时作为背景框架融合进报告。
  *
  * 状态机映射 ResearchState：
  *   queued → planning → collecting → analyzing → writing → completed | failed
@@ -68,6 +76,8 @@ export interface DeepResearchResult {
   elapsedMs: number;
   /** 引用完整性校验结论（软校验，不阻断完成） */
   review?: CitationReview;
+  /** 模型内在知识直答全文（失败/超时为空串；仅落库追溯，前端不单独展示） */
+  knowledgeAnswer?: string;
   /** 本次研究对知识图谱的增量统计（图谱更新失败时为 null） */
   graphStats?: MergeStats | null;
 }
@@ -156,6 +166,66 @@ async function planResearch(
     subQuestions.push({ id: "sub_1", question, rationale: "Planner 拆解失败，直接研究原问题", keywords: [] });
   }
   return { objective, subQuestions };
+}
+
+// ─── 内在知识直答通道（与 Executor 并行的有界 LLM 调用）───────────────────────
+
+/** 直答超时上限：与检索并行执行，超时/失败一律降级为空串，不阻断主流程 */
+const KNOWLEDGE_TIMEOUT_MS = 120_000;
+
+/**
+ * 仅凭模型训练知识直答研究问题（不开启 provider 内置搜索参数）。
+ * 有界并行通道：任何失败/超时静默降级为空串，报告退回纯 web 证据成稿。
+ */
+async function generateKnowledgeAnswer(
+  question: string,
+  objective: string,
+  sink: (event: AgentEvent) => void,
+  extraContext?: { sourceContext?: string; graphContext?: string },
+): Promise<string> {
+  const stepId = "dr_knowledge";
+  sink({ type: "step", stepId, agent: "researcher", label: "模型内在知识直答", status: "running" });
+  const t0 = Date.now();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const contextBlock = `${extraContext?.sourceContext ?? ""}${extraContext?.graphContext ?? ""}`;
+    const answer = await Promise.race([
+      chatCompletion(
+        [
+          { role: "system", content: KNOWLEDGE_PROMPT },
+          {
+            role: "user",
+            content: `${contextBlock ? `${contextBlock}\n\n` : ""}研究问题：${question}\n研究目标：${objective}`,
+          },
+        ],
+        { temperature: 0.3, maxTokens: 2048 },
+      ),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`直答超时（${KNOWLEDGE_TIMEOUT_MS / 1000}s）`)),
+          KNOWLEDGE_TIMEOUT_MS,
+        );
+      }),
+    ]);
+    const text = typeof answer === "string" ? answer.trim() : "";
+    sink({
+      type: "step", stepId, agent: "researcher",
+      label: text ? "模型内在知识直答完成" : "模型内在知识直答为空",
+      status: "done",
+      detail: text ? `${text.length} 字 · ${((Date.now() - t0) / 1000).toFixed(1)}s` : undefined,
+    });
+    return text;
+  } catch (error) {
+    sink({
+      type: "step", stepId, agent: "researcher",
+      label: "模型内在知识直答失败（静默降级，仅用 web 证据成稿）",
+      status: "done",
+      detail: error instanceof Error ? error.message : String(error),
+    });
+    return "";
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 // ─── Executor：逐子问题证据收集（研究算子驱动）────────────────────────────────
@@ -482,6 +552,12 @@ export async function runDeepResearch(options: DeepResearchOptions): Promise<Dee
       subQuestions: subQuestions.map((s) => ({ id: s.id, question: s.question, rationale: s.rationale })),
     });
 
+    // ── 内在知识直答通道：与 Executor 证据收集并行，成稿前汇合 ──
+    const knowledgePromise = generateKnowledgeAnswer(question, objective, sink, {
+      sourceContext: options.sourceContext,
+      graphContext: options.graphContext,
+    });
+
     // ── Executor（子问题并发 2 受限并行收集，事件按子问题 stepId 区分）──
     await options.onStateChange?.("collecting");
     sink({ type: "phase", phase: "research", label: "证据收集（Executor 并行检索与深读）" });
@@ -504,10 +580,7 @@ export async function runDeepResearch(options: DeepResearchOptions): Promise<Dee
       return result;
     });
 
-    const citations = registry.all();
-    if (citations.length > 0) {
-      sink({ type: "citations", citations });
-    }
+    const allCitations = registry.all();
 
     // ── Analyzing：多源交叉比对（CompareOp 算子）──
     await options.onStateChange?.("analyzing");
@@ -537,13 +610,18 @@ export async function runDeepResearch(options: DeepResearchOptions): Promise<Dee
       const block = [...excerpts, ...snippets].map(formatEvidenceMaterial).join("\n\n");
       return `### ${r.question}\n${block || "未取得可用原文证据；不能据此给出确定结论。"}`;
     }).join("\n\n");
-    const citationBlock = citations.map((c) => `[${c.no}] ${c.title} — ${c.url}`).join("\n");
+    const citationBlock = allCitations.map((c) => `[${c.no}] ${c.title} — ${c.url}`).join("\n");
     // 来源任务问答背景：报告需呼应背景结论并给出针对性建议（无背景时不注入）
     const sourceBlock = options.sourceContext ? `${options.sourceContext}\n\n` : "";
     // 研究知识图谱背景：报告需说明相对历史研究的增量（无命中时不注入）
     const graphBlock = options.graphContext ? `${options.graphContext}\n\n` : "";
     // CompareOp 多源比对结论：供综合分析吸收共识/分歧判断（比对跳过时不注入）
     const compareBlock = comparison ? `## 多源比对结论（CompareOp 算子）\n${comparison}\n\n` : "";
+    // 内在知识直答：与 web 证据融合成稿（通道失败/为空时不注入）
+    const knowledgeAnswer = await knowledgePromise;
+    const knowledgeBlock = knowledgeAnswer
+      ? `## 模型内在知识直答（训练知识，未经检索验证）\n${knowledgeAnswer.slice(0, 4000)}\n\n`
+      : "";
 
     let report = "";
     for await (const chunk of chatCompletionStream(
@@ -551,7 +629,7 @@ export async function runDeepResearch(options: DeepResearchOptions): Promise<Dee
         { role: "system", content: REPORT_PROMPT },
         {
           role: "user",
-          content: `${sourceBlock}${graphBlock}研究问题：${question}\n研究目标：${objective}\n\n## 原始证据\n${sourceEvidenceBlock}\n\n${compareBlock}## 各子问题研究发现\n${evidenceBlock}\n\n## 引用来源\n${citationBlock}`,
+          content: `${sourceBlock}${graphBlock}研究问题：${question}\n研究目标：${objective}\n\n## 原始证据\n${sourceEvidenceBlock}\n\n${compareBlock}${knowledgeBlock}## 各子问题研究发现\n${evidenceBlock}\n\n## 引用来源\n${citationBlock}`,
         },
       ],
       { temperature: 0.3, maxTokens: 8192 },
@@ -561,6 +639,26 @@ export async function runDeepResearch(options: DeepResearchOptions): Promise<Dee
     }
 
     sink({ type: "step", stepId: writeStepId, agent: "synthesizer", label: "报告撰写完成", status: "done" });
+
+    // ── 引用收敛：参考文献只保留报告正文实际引用的来源，并重排为连续编号 ──
+    // 检索到但未被正文采纳的结果（含名词解释类低质量页面）不再充数；
+    // 正文一个编号都没引用时参考文献为空——没有结果就是没有结果。
+    // 重排映射同步改写报告与子问题发现文本，消除断号（如 [7][13][48]）。
+    const citedNos = new Set(extractCitationNos(report));
+    const { citations, remap } = renumberCitations(allCitations, citedNos);
+    report = remapCitationText(report, remap);
+    for (const r of subResults) {
+      r.findings = r.findings.map((f) => remapCitationText(f, remap));
+      r.citationNos = r.citationNos
+        .map((n) => remap.get(n))
+        .filter((n): n is number => n !== undefined);
+      if (r.evidence) {
+        r.evidence = r.evidence.map((m) => (remap.has(m.no) ? { ...m, no: remap.get(m.no)! } : m));
+      }
+    }
+    sink({ type: "citations", citations });
+    // 流式正文用的是重排前编号，全文替换事件让前端与落库报告对齐
+    sink({ type: "answer", content: report });
 
     // ── Review：引用完整性校验（graph-reviewer 思想，软校验不阻断）──
     const reviewStepId = "dr_review";
@@ -578,7 +676,7 @@ export async function runDeepResearch(options: DeepResearchOptions): Promise<Dee
 
     await options.onStateChange?.("completed");
 
-    return { objective, subQuestions: subResults, report, citations, elapsedMs: Date.now() - t0, review, graphStats };
+    return { objective, subQuestions: subResults, report, citations, elapsedMs: Date.now() - t0, review, knowledgeAnswer, graphStats };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     sink({ type: "error", message: `深度研究失败：${message}` });

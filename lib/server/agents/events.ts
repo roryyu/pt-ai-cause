@@ -48,6 +48,8 @@ export type AgentEvent =
   | { type: "table"; table: TablePayload }
   | { type: "chart"; chart: ChartSpec }
   | { type: "chunk"; content: string }
+  /** 全文替换已流式输出的回答（引用编号收敛重排后与参考文献对齐） */
+  | { type: "answer"; content: string }
   | { type: "citations"; citations: Array<{ no: number; title: string; url: string }> }
   | { type: "done"; questionId: string; elapsedMs: number }
   | { type: "error"; message: string };

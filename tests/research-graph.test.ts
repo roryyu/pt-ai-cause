@@ -5,7 +5,7 @@ import os from "node:os";
 import { emptyGraph, normalizeNodeLabel, parseGraphPatch, type GraphPatch, type GraphReportRef } from "@/lib/server/research-graph/types";
 import { mergeGraph, loadGraph, saveGraph } from "@/lib/server/research-graph/store";
 import { queryGraph, tokenize } from "@/lib/server/research-graph/query";
-import { verifyCitationIntegrity, extractCitationNos } from "@/lib/server/research-graph/review";
+import { verifyCitationIntegrity, extractCitationNos, renumberCitations, remapCitationText } from "@/lib/server/research-graph/review";
 import { graphContextBlock } from "@/lib/server/agents/prompts";
 
 /**
@@ -173,6 +173,35 @@ describe("verifyCitationIntegrity（引用完整性）", () => {
 
   it("extractCitationNos 仅取正整数编号", () => {
     expect(extractCitationNos("见 [1][2] 与 [0] 和 [x]")).toEqual([1, 2]);
+  });
+});
+
+describe("renumberCitations / remapCitationText（引用收敛重排）", () => {
+  const citations = [
+    { no: 7, title: "来源A", url: "https://a.example" },
+    { no: 13, title: "来源B", url: "https://b.example" },
+    { no: 48, title: "来源C", url: "https://c.example" },
+  ];
+
+  it("仅保留被引用编号并重排为连续 1..N", () => {
+    const { citations: kept, remap } = renumberCitations(citations, new Set([7, 48]));
+    expect(kept.map((c) => [c.no, c.url])).toEqual([
+      [1, "https://a.example"],
+      [2, "https://c.example"],
+    ]);
+    expect(remap.get(7)).toBe(1);
+    expect(remap.get(13)).toBeUndefined();
+    expect(remap.get(48)).toBe(2);
+  });
+
+  it("改写正文编号，映射外编号（如年份）原样保留", () => {
+    const { remap } = renumberCitations(citations, new Set([7, 48]));
+    expect(remapCitationText("2026 年 [2026] 甲 [7] 丙 [48]", remap)).toBe("2026 年 [2026] 甲 [1] 丙 [2]");
+  });
+
+  it("无命中时返回空引用表", () => {
+    const { citations: kept } = renumberCitations(citations, new Set());
+    expect(kept).toHaveLength(0);
   });
 });
 

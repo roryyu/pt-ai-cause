@@ -24,6 +24,32 @@ export function extractCitationNos(text: string): number[] {
   return nos;
 }
 
+/** 按 旧→新 映射改写文本中的 [n] 引用编号（映射外的编号如年份 [2026] 原样保留） */
+export function remapCitationText(text: string, remap: Map<number, number>): string {
+  return text.replace(/\[(\d+)\]/g, (token, digits: string) => {
+    const next = remap.get(Number(digits));
+    return next === undefined ? token : `[${next}]`;
+  });
+}
+
+/**
+ * 引用表收敛重排：仅保留被 citedNos 命中的来源，按保留顺序重排为连续 1..N，
+ * 返回重排后的引用表与 旧→新 编号映射（供正文/发现文本同步改写，消除断号）
+ */
+export function renumberCitations(
+  citations: CitationEntry[],
+  citedNos: Set<number>,
+): { citations: CitationEntry[]; remap: Map<number, number> } {
+  const remap = new Map<number, number>();
+  const renumbered = citations
+    .filter((c) => citedNos.has(c.no))
+    .map((c, i) => {
+      remap.set(c.no, i + 1);
+      return { ...c, no: i + 1 };
+    });
+  return { citations: renumbered, remap };
+}
+
 export function verifyCitationIntegrity(report: string, citations: CitationEntry[]): CitationReview {
   const issues: string[] = [];
   const citedNos = [...new Set(extractCitationNos(report))];

@@ -41,6 +41,8 @@ export type AgentEvent =
   | { type: "table"; table: TablePayload }
   | { type: "chart"; chart: ChartSpec }
   | { type: "chunk"; content: string }
+  /** 全文替换已流式输出的回答（引用编号收敛重排后与参考文献对齐） */
+  | { type: "answer"; content: string }
   | { type: "citations"; citations: Citation[] }
   | { type: "done"; questionId: string; elapsedMs: number }
   | { type: "error"; message: string };
@@ -155,6 +157,8 @@ export function applyAgentEvent(state: AgentStreamState, event: AgentEvent): Age
       return { ...state, charts: [...state.charts, event.chart] };
     case "chunk":
       return { ...state, answer: state.answer + event.content };
+    case "answer":
+      return { ...state, answer: event.content };
     case "citations":
       return { ...state, citations: event.citations };
     case "done":

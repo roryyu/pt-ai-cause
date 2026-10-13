@@ -105,6 +105,9 @@ export async function POST(request: Request) {
       try {
         send({ type: "meta", questionId, model: getDefaultModel() });
 
+        // 子任务行 id（sub.id → rowId）：引用编号收敛重排后回写子任务产出
+        const subTaskRowIds = new Map<string, string>();
+
         const result = await runDeepResearch({
           questionId,
           question: input.question,
@@ -122,10 +125,12 @@ export async function POST(request: Request) {
           },
           onSubTask: async (sub) => {
             // 每个子问题 → 子任务记录（parentTaskId 关联主任务）
+            const rowId = newId("task");
+            subTaskRowIds.set(sub.id, rowId);
             await prisma.researchTask
               .create({
                 data: {
-                  id: newId("task"),
+                  id: rowId,
                   questionId,
                   parentTaskId: mainTaskId,
                   agentType: "researcher",
@@ -143,6 +148,26 @@ export async function POST(request: Request) {
               .catch((err) => console.warn("[RESEARCH] 子任务持久化失败:", err));
           },
         });
+
+        // 回写子任务产出：收集期落库的 findings/citationNos 是重排前编号，
+        // 收敛重排后与主报告参考文献对齐（失败不阻断主流程）
+        for (const s of result.subQuestions) {
+          const rowId = subTaskRowIds.get(s.id);
+          if (!rowId) continue;
+          await prisma.researchTask
+            .update({
+              where: { id: rowId },
+              data: {
+                output: {
+                  findings: s.findings,
+                  evidence: s.evidence ?? [],
+                  citationNos: s.citationNos,
+                  elapsedMs: s.elapsedMs,
+                } as object,
+              },
+            })
+            .catch((err) => console.warn("[RESEARCH] 子任务重排回写失败:", err));
+        }
 
         // 持久化报告
         const answerPayload = JSON.parse(
@@ -178,6 +203,7 @@ export async function POST(request: Request) {
               objective: result.objective,
               report: result.report,
               subQuestionCount: result.subQuestions.length,
+              knowledgeAnswer: result.knowledgeAnswer ?? "",
             } as object,
             citations: JSON.parse(JSON.stringify(result.citations)) as object,
             completedAt: new Date(),

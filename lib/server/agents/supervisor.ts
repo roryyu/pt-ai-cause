@@ -3,6 +3,7 @@ import { chatCompletion, chatCompletionStream, getDefaultModel } from "@/lib/ser
 import type { AgentEvent, AgentRunContext } from "./events";
 import { createRunContext, nextStepId } from "./events";
 import { runDataAnalystWorker, runResearchWorker } from "./workers";
+import { extractCitationNos, renumberCitations, remapCitationText } from "@/lib/server/research-graph/review";
 import { ROUTING_PROMPT, DIRECT_ANSWER_PROMPT, CRITIC_PROMPT, SYNTHESIZER_PROMPT } from "./prompts";
 
 /**
@@ -358,9 +359,25 @@ export async function runAgentWorkflow(options: RunWorkflowOptions): Promise<Wor
   );
 
   const elapsedMs = Date.now() - ctx.startedAt;
+
+  // 引用收敛：参考文献只保留回答/研究发现实际引用的来源编号，并重排为连续编号；
+  // 检索到但未被采纳的结果（含名词解释类低质量页面）不再充数
+  let finalAnswer = finalState.finalAnswer;
+  if (ctx.researchFindings.citations.length > 0) {
+    const citedText = `${finalAnswer}\n${ctx.researchFindings.notes.join("\n")}`;
+    const citedNos = new Set(extractCitationNos(citedText));
+    const { citations, remap } = renumberCitations(ctx.researchFindings.citations, citedNos);
+    ctx.researchFindings.citations = citations;
+    finalAnswer = remapCitationText(finalAnswer, remap);
+    ctx.researchFindings.notes = ctx.researchFindings.notes.map((n) => remapCitationText(n, remap));
+    ctx.sink({ type: "citations", citations });
+    // 流式回答用的是重排前编号，全文替换事件让前端与落库答案对齐
+    ctx.sink({ type: "answer", content: finalAnswer });
+  }
+
   return {
     route: finalState.route,
-    finalAnswer: finalState.finalAnswer,
+    finalAnswer,
     dataFindings: ctx.dataFindings,
     researchFindings: ctx.researchFindings,
     critique: ctx.critique,

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-10-10T03:23:21.704Z",
+  "updatedAt": "2026-10-13T11:48:49.683Z",
   "nodes": [
     {
       "id": "node_13d37aaf-7229-4c9d-ab47-2cd6e126e87b",
@@ -66,13 +66,14 @@
       "id": "node_ef271bdd-d5d2-40d8-98d2-cf62da7c902d",
       "label": "Adjust",
       "type": "entity",
-      "summary": "提供TikTok品类CPI元分析：较基准低40%-65%、辅助安装多19%、卸载率低8%（搜索摘要，待核实）[34]",
+      "summary": "第三方归因平台，数据表adjust_daily_metrics中花费字段整体缺失，同期总花费仅43.40",
       "reportIds": [
         "question_86cf2e8f-5aa2-43b5-8520-da799136912a",
         "question_40bf3c52-193c-434b-87b0-80bbf0bdc6ce",
-        "question_37e8a786-76f5-46bf-aca3-ffb4d94e2374"
+        "question_37e8a786-76f5-46bf-aca3-ffb4d94e2374",
+        "question_e8990eeb-883a-4791-80d5-32bd95181ad9"
       ],
-      "updatedAt": "2026-10-10T03:23:21.704Z"
+      "updatedAt": "2026-10-12T03:28:20.502Z"
     },
     {
       "id": "node_b16b31f5-f2ea-4d6a-aea7-ea0a0af95291",
@@ -209,12 +210,13 @@
       "id": "node_55975154-a06d-42c1-a950-35871a3f20be",
       "label": "传音",
       "type": "entity",
-      "summary": "传音/Chuanyin历史RD/FD为43.71%，但渠道恶化主因证据不足，需核验归因回传、流量质量与作弊风险。",
+      "summary": "安装→注册转化率仅0.04%-0.01%，高度疑似预装/静默推送驱动，用户非主动下载；本次检索未获取其广告平台具体信息，存在明显信息缺口",
       "reportIds": [
         "question_72a6d0cc-46b7-4c99-a0e0-3fdcc8095126",
-        "question_16ceab0a-d65a-4321-95a3-860001c1c962"
+        "question_16ceab0a-d65a-4321-95a3-860001c1c962",
+        "question_b55f7821-156e-4d38-b697-e85132549499"
       ],
-      "updatedAt": "2026-09-17T01:17:38.672Z"
+      "updatedAt": "2026-10-13T11:48:49.683Z"
     },
     {
       "id": "node_62844c49-27cd-41f9-a8d2-e2411292834e",
@@ -621,11 +623,12 @@
       "id": "node_fdf9a7ab-7990-4b21-ba64-1021abb581cb",
       "label": "TikTok",
       "type": "entity",
-      "summary": "2025 Q1流量类CPC $0.01、CTR 4.93%（较Meta高94%）、考虑阶段CPA比Meta低89%；品类CPI较行业基准低40%-65% [28][34]",
+      "summary": "用%tiktok%、%bytedance%等条件在adjust_daily_metrics中均未命中匹配记录",
       "reportIds": [
-        "question_37e8a786-76f5-46bf-aca3-ffb4d94e2374"
+        "question_37e8a786-76f5-46bf-aca3-ffb4d94e2374",
+        "question_e8990eeb-883a-4791-80d5-32bd95181ad9"
       ],
-      "updatedAt": "2026-10-10T03:23:21.704Z"
+      "updatedAt": "2026-10-12T03:28:20.502Z"
     },
     {
       "id": "node_bb7d0b01-06d5-4530-ba89-16aba168c85e",
@@ -716,6 +719,266 @@
         "question_37e8a786-76f5-46bf-aca3-ffb4d94e2374"
       ],
       "updatedAt": "2026-10-10T03:23:21.704Z"
+    },
+    {
+      "id": "node_5214af96-6797-486e-9e8c-6121d491b702",
+      "label": "Meta（FBN）",
+      "type": "entity",
+      "summary": "15个子渠道在2026-05-01~10-09期间花费=0，归因事件流正常（FD=2791）但媒体侧cost字段断裂",
+      "reportIds": [
+        "question_e8990eeb-883a-4791-80d5-32bd95181ad9"
+      ],
+      "updatedAt": "2026-10-12T03:28:20.502Z"
+    },
+    {
+      "id": "node_2dcb4936-d14b-4241-aa50-57f30f4a1c2e",
+      "label": "X",
+      "type": "entity",
+      "summary": "用%twitter%、'X'等条件在adjust_daily_metrics中均未命中匹配记录",
+      "reportIds": [
+        "question_e8990eeb-883a-4791-80d5-32bd95181ad9"
+      ],
+      "updatedAt": "2026-10-12T03:28:20.502Z"
+    },
+    {
+      "id": "node_724e2725-28f0-4675-be90-5951d052c5b2",
+      "label": "Meta Marketing API",
+      "type": "entity",
+      "summary": "疑似Meta花费=0的根因所在，大概率为API权限或字段映射问题而非链路整体故障",
+      "reportIds": [
+        "question_e8990eeb-883a-4791-80d5-32bd95181ad9"
+      ],
+      "updatedAt": "2026-10-12T03:28:20.502Z"
+    },
+    {
+      "id": "node_39967acb-25f9-4a1a-a3a8-4747926ddb99",
+      "label": "FD/下载比率",
+      "type": "entity",
+      "summary": "花费修复前的替代渠道质量代理指标，不依赖花费数据，但其能否有效代理ROI缺乏证据支撑",
+      "reportIds": [
+        "question_e8990eeb-883a-4791-80d5-32bd95181ad9"
+      ],
+      "updatedAt": "2026-10-12T03:28:20.502Z"
+    },
+    {
+      "id": "node_51808585-e20b-406b-a7a4-faa8ca43b7bb",
+      "label": "花费数据治理",
+      "type": "topic",
+      "summary": "报告确认的唯一阻断性前置任务，包括Meta花费回传修复与TikTok/X渠道命名排查",
+      "reportIds": [
+        "question_e8990eeb-883a-4791-80d5-32bd95181ad9"
+      ],
+      "updatedAt": "2026-10-12T03:28:20.502Z"
+    },
+    {
+      "id": "node_d91e8f53-198f-4e61-8bbd-542bfda702cc",
+      "label": "渠道效果替代评估",
+      "type": "topic",
+      "summary": "在花费数据不可用时，利用已有字段（FD/下载、RD/下载）或媒体后台手动导出做有限比较的过渡方案",
+      "reportIds": [
+        "question_e8990eeb-883a-4791-80d5-32bd95181ad9"
+      ],
+      "updatedAt": "2026-10-12T03:28:20.502Z"
+    },
+    {
+      "id": "node_3821b5ec-0d47-4e2e-9ad9-8a71a4ded097",
+      "label": "归因数据完整性",
+      "type": "topic",
+      "summary": "渠道间数据口径不一致、花费字段缺失导致无法进行预算再分配决策的系统性问题",
+      "reportIds": [
+        "question_e8990eeb-883a-4791-80d5-32bd95181ad9"
+      ],
+      "updatedAt": "2026-10-12T03:28:20.502Z"
+    },
+    {
+      "id": "question_e8990eeb-883a-4791-80d5-32bd95181ad9",
+      "label": "在花费数据缺失的现实约束下，探索Meta/X/TikTok渠道效果优化的可落地路径，涵盖数据修复方案、替代评估方法与渠道投放策略",
+      "type": "report",
+      "summary": "2026年5-10月Meta/TikTok/X三渠道花费数据在Adjust中整体缺失（全量花费仅43.40，同期下载1341万），唯一确定性行动为数据治理，优化方案暂无法落地。",
+      "reportIds": [
+        "question_e8990eeb-883a-4791-80d5-32bd95181ad9"
+      ],
+      "updatedAt": "2026-10-12T03:28:20.502Z"
+    },
+    {
+      "id": "node_698e6a11-0a3e-4dc1-9852-33c436cfe6e1",
+      "label": "AppsFlyer",
+      "type": "entity",
+      "summary": "归因平台，官方称其欺诈防护可实时拦截可疑活动、AI适应新型欺诈手段，每日拦截数百万威胁 [7]（搜索摘要，未核对正文）。",
+      "reportIds": [
+        "question_d0538de8-9a6a-4638-8a04-7aed6927eedd"
+      ],
+      "updatedAt": "2026-10-13T02:18:11.945Z"
+    },
+    {
+      "id": "node_1f5118e7-28e1-4dc8-a705-8d20880d5122",
+      "label": "AppsFlyer Protect360",
+      "type": "entity",
+      "summary": "AppsFlyer旗下反欺诈产品，报告建议查阅其官方文档中关于 Untrusted Devices 或 device farm detection 的说明，当前文档尚未获取。",
+      "reportIds": [
+        "question_d0538de8-9a6a-4638-8a04-7aed6927eedd"
+      ],
+      "updatedAt": "2026-10-13T02:18:11.945Z"
+    },
+    {
+      "id": "node_1346a9b6-cfd5-4499-9fa7-b16017db1310",
+      "label": "Untrusted Devices",
+      "type": "entity",
+      "summary": "归因平台的拦截分类标签，9月共触发73,943次拦截，占比0.42%；具体判定规则与触发条件在现有材料中未找到一手技术文档。",
+      "reportIds": [
+        "question_d0538de8-9a6a-4638-8a04-7aed6927eedd"
+      ],
+      "updatedAt": "2026-10-13T02:18:11.945Z"
+    },
+    {
+      "id": "node_a017527d-9e32-4a94-af64-2926873850ef",
+      "label": "Gadmobe",
+      "type": "entity",
+      "summary": "报告推断性提及的广告渠道，假设拦截可能集中于该渠道，需针对性核查其设备质量（推断，非确认事实）。",
+      "reportIds": [
+        "question_d0538de8-9a6a-4638-8a04-7aed6927eedd"
+      ],
+      "updatedAt": "2026-10-13T02:18:11.945Z"
+    },
+    {
+      "id": "node_8105b546-fe62-45f7-8912-4e976f4c6019",
+      "label": "广告反欺诈拦截机制",
+      "type": "topic",
+      "summary": "归因平台对可疑设备与流量的自动识别与拦截逻辑，包括判定规则、拦截原因标签分类及误拦截率控制。",
+      "reportIds": [
+        "question_d0538de8-9a6a-4638-8a04-7aed6927eedd"
+      ],
+      "updatedAt": "2026-10-13T02:18:11.945Z"
+    },
+    {
+      "id": "node_d6704b89-342b-4c07-813f-8ad897afc8ca",
+      "label": "归因拦截处置与结算影响",
+      "type": "topic",
+      "summary": "拦截发生后对广告主与渠道结算、ROI计算及渠道评估的影响，以及丢弃/复核/白名单等处置策略的选择依据。",
+      "reportIds": [
+        "question_d0538de8-9a6a-4638-8a04-7aed6927eedd"
+      ],
+      "updatedAt": "2026-10-13T02:18:11.945Z"
+    },
+    {
+      "id": "question_d0538de8-9a6a-4638-8a04-7aed6927eedd",
+      "label": "明确流量归因平台中 Untrusted Devices 拦截的判定机制、行业处理策略及对投放结算的影响，为制定合理的处置方案提供依据",
+      "type": "report",
+      "summary": "9月Untrusted Devices拦截73,943次，占总安装1,753.5万次的0.42%，属低水位，短期无需紧急干预；但归因平台判定规则文档缺失，建议先导出拦截明细分析渠道与原因分布再制定处置策略。",
+      "reportIds": [
+        "question_d0538de8-9a6a-4638-8a04-7aed6927eedd"
+      ],
+      "updatedAt": "2026-10-13T02:18:11.945Z"
+    },
+    {
+      "id": "node_423d706f-e2ca-4eae-9998-fbb2baee3eff",
+      "label": "OPPO",
+      "type": "entity",
+      "summary": "2025年终实测推送广告仅2条，为所有厂商中最少；安装量最高（45.3万），转化相对健康，用户体验干扰小、主动意图强 [5]",
+      "reportIds": [
+        "question_b55f7821-156e-4d38-b697-e85132549499"
+      ],
+      "updatedAt": "2026-10-13T11:48:49.683Z"
+    },
+    {
+      "id": "node_0195022e-85eb-4fe8-aae6-7b22334d4477",
+      "label": "小米",
+      "type": "entity",
+      "summary": "2026年实测HyperOS广告密度居第一梯队，日均推送8-10条 [6]；2025年终推送广告14-18条 [5]；安装量偏低（11.5万），可能与高广告密度致用户疲劳有关",
+      "reportIds": [
+        "question_b55f7821-156e-4d38-b697-e85132549499"
+      ],
+      "updatedAt": "2026-10-13T11:48:49.683Z"
+    },
+    {
+      "id": "node_7a5b7e8a-2223-4e82-b49f-cefae58e695b",
+      "label": "Vivo",
+      "type": "entity",
+      "summary": "2025年终推送广告14-18条，预装应用23个 [5]；安装量9.9万；用户以年轻人和时尚人群为主 [19]",
+      "reportIds": [
+        "question_b55f7821-156e-4d38-b697-e85132549499"
+      ],
+      "updatedAt": "2026-10-13T11:48:49.683Z"
+    },
+    {
+      "id": "node_f4abc425-afbf-4aad-9d18-65ca4f1ac36c",
+      "label": "荣耀",
+      "type": "entity",
+      "summary": "2025年终实测推送广告最多达39条，预装应用24个 [5]",
+      "reportIds": [
+        "question_b55f7821-156e-4d38-b697-e85132549499"
+      ],
+      "updatedAt": "2026-10-13T11:48:49.683Z"
+    },
+    {
+      "id": "node_d69b1ebd-9b1c-4908-9451-49c0999ed5eb",
+      "label": "阿里云流量推广反作弊",
+      "type": "entity",
+      "summary": "商业反作弊产品，基于设备、网络环境、行为异常等维度实时判断风险，已覆盖休闲游戏、社交等场景 [4]",
+      "reportIds": [
+        "question_b55f7821-156e-4d38-b697-e85132549499"
+      ],
+      "updatedAt": "2026-10-13T11:48:49.683Z"
+    },
+    {
+      "id": "node_46e0ab3c-ee79-4c25-a3fe-0efcdde9abcd",
+      "label": "《互联网应用程序个人信息收集使用规定（征求意见稿）》",
+      "type": "entity",
+      "summary": "2026年1月10日国家网信办发布，旨在规范互联网应用程序个人信息收集使用活动，对品牌营销、AdTech与DSP产生影响 [7]",
+      "reportIds": [
+        "question_b55f7821-156e-4d38-b697-e85132549499"
+      ],
+      "updatedAt": "2026-10-13T11:48:49.683Z"
+    },
+    {
+      "id": "node_7f3dc151-7730-4c9b-ac23-a2c097b66290",
+      "label": "《网络安全法》修正案",
+      "type": "entity",
+      "summary": "2025年10月28日全国人大常委会通过，2026年1月1日施行，完善网络安全指导原则、AI治理条款和法律责任体系 [8]",
+      "reportIds": [
+        "question_b55f7821-156e-4d38-b697-e85132549499"
+      ],
+      "updatedAt": "2026-10-13T11:48:49.683Z"
+    },
+    {
+      "id": "node_078d117e-5020-4ea4-8678-0ab14abbaf9a",
+      "label": "硬件厂商渠道流量质量分化",
+      "type": "topic",
+      "summary": "国内Oppo/Xiaomi/Vivo/传音等硬件厂商渠道在安装量与转化率上表现显著分化，本质由流量属性（预装驱动vs主动搜索）、广告体验差异和用户质量分层决定",
+      "reportIds": [
+        "question_b55f7821-156e-4d38-b697-e85132549499"
+      ],
+      "updatedAt": "2026-10-13T11:48:49.683Z"
+    },
+    {
+      "id": "node_a249a10e-89ee-45e8-a14b-ad0a42306402",
+      "label": "广告反作弊与归因审计",
+      "type": "topic",
+      "summary": "虚假安装识别（设备农场、点击泛洪、归因劫持）及多维设备指纹、时空对撞、行为序列分析等反作弊技术在渠道流量质量评估中的应用",
+      "reportIds": [
+        "question_b55f7821-156e-4d38-b697-e85132549499"
+      ],
+      "updatedAt": "2026-10-13T11:48:49.683Z"
+    },
+    {
+      "id": "node_161dcd44-31fa-4857-97ed-bf0e195a681e",
+      "label": "数据合规对投放评估的影响",
+      "type": "topic",
+      "summary": "2025-2026年数据安全与隐私合规政策密集出台，正在系统性影响归因数据回传能力，使跨期、跨渠道对比的可靠性下降",
+      "reportIds": [
+        "question_b55f7821-156e-4d38-b697-e85132549499"
+      ],
+      "updatedAt": "2026-10-13T11:48:49.683Z"
+    },
+    {
+      "id": "question_b55f7821-156e-4d38-b697-e85132549499",
+      "label": "分析国内硬件厂商渠道（Oppo/Xiaomi/Vivo/传音等）安装量与转化率表现分化的外部成因，并探索针对性的优化与应对策略",
+      "type": "report",
+      "summary": "2025-2026年实测显示国内硬件厂商渠道分化源于流量属性结构性差异：OPPO广告最少（仅2条）安装量最高（45.3万）且转化健康，传音转化率仅0.04%-0.01%系预装驱动；行业内缺乏针对分化的预算再分配实践证据，应对依赖内部归因审计。",
+      "reportIds": [
+        "question_b55f7821-156e-4d38-b697-e85132549499"
+      ],
+      "updatedAt": "2026-10-13T11:48:49.683Z"
     }
   ],
   "edges": [
@@ -1318,6 +1581,238 @@
       "reportIds": [
         "question_37e8a786-76f5-46bf-aca3-ffb4d94e2374"
       ]
+    },
+    {
+      "source": "question_e8990eeb-883a-4791-80d5-32bd95181ad9",
+      "target": "node_51808585-e20b-406b-a7a4-faa8ca43b7bb",
+      "relation": "研究涉及",
+      "reportIds": [
+        "question_e8990eeb-883a-4791-80d5-32bd95181ad9"
+      ]
+    },
+    {
+      "source": "question_e8990eeb-883a-4791-80d5-32bd95181ad9",
+      "target": "node_d91e8f53-198f-4e61-8bbd-542bfda702cc",
+      "relation": "研究涉及",
+      "reportIds": [
+        "question_e8990eeb-883a-4791-80d5-32bd95181ad9"
+      ]
+    },
+    {
+      "source": "question_e8990eeb-883a-4791-80d5-32bd95181ad9",
+      "target": "node_3821b5ec-0d47-4e2e-9ad9-8a71a4ded097",
+      "relation": "研究涉及",
+      "reportIds": [
+        "question_e8990eeb-883a-4791-80d5-32bd95181ad9"
+      ]
+    },
+    {
+      "source": "node_5214af96-6797-486e-9e8c-6121d491b702",
+      "target": "node_ef271bdd-d5d2-40d8-98d2-cf62da7c902d",
+      "relation": "花费未回传至",
+      "reportIds": [
+        "question_e8990eeb-883a-4791-80d5-32bd95181ad9"
+      ]
+    },
+    {
+      "source": "node_fdf9a7ab-7990-4b21-ba64-1021abb581cb",
+      "target": "node_ef271bdd-d5d2-40d8-98d2-cf62da7c902d",
+      "relation": "无匹配记录于",
+      "reportIds": [
+        "question_e8990eeb-883a-4791-80d5-32bd95181ad9"
+      ]
+    },
+    {
+      "source": "node_2dcb4936-d14b-4241-aa50-57f30f4a1c2e",
+      "target": "node_ef271bdd-d5d2-40d8-98d2-cf62da7c902d",
+      "relation": "无匹配记录于",
+      "reportIds": [
+        "question_e8990eeb-883a-4791-80d5-32bd95181ad9"
+      ]
+    },
+    {
+      "source": "node_724e2725-28f0-4675-be90-5951d052c5b2",
+      "target": "node_5214af96-6797-486e-9e8c-6121d491b702",
+      "relation": "疑似导致其花费断裂",
+      "reportIds": [
+        "question_e8990eeb-883a-4791-80d5-32bd95181ad9"
+      ]
+    },
+    {
+      "source": "node_39967acb-25f9-4a1a-a3a8-4747926ddb99",
+      "target": "node_d91e8f53-198f-4e61-8bbd-542bfda702cc",
+      "relation": "属于",
+      "reportIds": [
+        "question_e8990eeb-883a-4791-80d5-32bd95181ad9"
+      ]
+    },
+    {
+      "source": "node_51808585-e20b-406b-a7a4-faa8ca43b7bb",
+      "target": "node_5214af96-6797-486e-9e8c-6121d491b702",
+      "relation": "优先修复对象为",
+      "reportIds": [
+        "question_e8990eeb-883a-4791-80d5-32bd95181ad9"
+      ]
+    },
+    {
+      "source": "node_724e2725-28f0-4675-be90-5951d052c5b2",
+      "target": "node_51808585-e20b-406b-a7a4-faa8ca43b7bb",
+      "relation": "是修复目标",
+      "reportIds": [
+        "question_e8990eeb-883a-4791-80d5-32bd95181ad9"
+      ]
+    },
+    {
+      "source": "node_3821b5ec-0d47-4e2e-9ad9-8a71a4ded097",
+      "target": "node_51808585-e20b-406b-a7a4-faa8ca43b7bb",
+      "relation": "驱动",
+      "reportIds": [
+        "question_e8990eeb-883a-4791-80d5-32bd95181ad9"
+      ]
+    },
+    {
+      "source": "question_d0538de8-9a6a-4638-8a04-7aed6927eedd",
+      "target": "node_8105b546-fe62-45f7-8912-4e976f4c6019",
+      "relation": "研究涉及",
+      "reportIds": [
+        "question_d0538de8-9a6a-4638-8a04-7aed6927eedd"
+      ]
+    },
+    {
+      "source": "question_d0538de8-9a6a-4638-8a04-7aed6927eedd",
+      "target": "node_d6704b89-342b-4c07-813f-8ad897afc8ca",
+      "relation": "研究涉及",
+      "reportIds": [
+        "question_d0538de8-9a6a-4638-8a04-7aed6927eedd"
+      ]
+    },
+    {
+      "source": "node_698e6a11-0a3e-4dc1-9852-33c436cfe6e1",
+      "target": "node_1346a9b6-cfd5-4499-9fa7-b16017db1310",
+      "relation": "产出拦截判定",
+      "reportIds": [
+        "question_d0538de8-9a6a-4638-8a04-7aed6927eedd"
+      ]
+    },
+    {
+      "source": "node_1f5118e7-28e1-4dc8-a705-8d20880d5122",
+      "target": "node_698e6a11-0a3e-4dc1-9852-33c436cfe6e1",
+      "relation": "属于其反欺诈子产品",
+      "reportIds": [
+        "question_d0538de8-9a6a-4638-8a04-7aed6927eedd"
+      ]
+    },
+    {
+      "source": "node_1346a9b6-cfd5-4499-9fa7-b16017db1310",
+      "target": "node_8105b546-fe62-45f7-8912-4e976f4c6019",
+      "relation": "属于",
+      "reportIds": [
+        "question_d0538de8-9a6a-4638-8a04-7aed6927eedd"
+      ]
+    },
+    {
+      "source": "node_1346a9b6-cfd5-4499-9fa7-b16017db1310",
+      "target": "node_d6704b89-342b-4c07-813f-8ad897afc8ca",
+      "relation": "触发处置决策",
+      "reportIds": [
+        "question_d0538de8-9a6a-4638-8a04-7aed6927eedd"
+      ]
+    },
+    {
+      "source": "node_a017527d-9e32-4a94-af64-2926873850ef",
+      "target": "node_1346a9b6-cfd5-4499-9fa7-b16017db1310",
+      "relation": "可能为拦截集中来源渠道（待验证）",
+      "reportIds": [
+        "question_d0538de8-9a6a-4638-8a04-7aed6927eedd"
+      ]
+    },
+    {
+      "source": "question_b55f7821-156e-4d38-b697-e85132549499",
+      "target": "node_078d117e-5020-4ea4-8678-0ab14abbaf9a",
+      "relation": "研究涉及",
+      "reportIds": [
+        "question_b55f7821-156e-4d38-b697-e85132549499"
+      ]
+    },
+    {
+      "source": "question_b55f7821-156e-4d38-b697-e85132549499",
+      "target": "node_a249a10e-89ee-45e8-a14b-ad0a42306402",
+      "relation": "研究涉及",
+      "reportIds": [
+        "question_b55f7821-156e-4d38-b697-e85132549499"
+      ]
+    },
+    {
+      "source": "question_b55f7821-156e-4d38-b697-e85132549499",
+      "target": "node_161dcd44-31fa-4857-97ed-bf0e195a681e",
+      "relation": "研究涉及",
+      "reportIds": [
+        "question_b55f7821-156e-4d38-b697-e85132549499"
+      ]
+    },
+    {
+      "source": "node_423d706f-e2ca-4eae-9998-fbb2baee3eff",
+      "target": "node_078d117e-5020-4ea4-8678-0ab14abbaf9a",
+      "relation": "广告密度最低且转化表现最优，为分化中的正面案例",
+      "reportIds": [
+        "question_b55f7821-156e-4d38-b697-e85132549499"
+      ]
+    },
+    {
+      "source": "node_55975154-a06d-42c1-a950-35871a3f20be",
+      "target": "node_078d117e-5020-4ea4-8678-0ab14abbaf9a",
+      "relation": "预装驱动导致转化率异常低，为分化中的极端负面案例",
+      "reportIds": [
+        "question_b55f7821-156e-4d38-b697-e85132549499"
+      ]
+    },
+    {
+      "source": "node_0195022e-85eb-4fe8-aae6-7b22334d4477",
+      "target": "node_078d117e-5020-4ea4-8678-0ab14abbaf9a",
+      "relation": "高广告密度与安装量偏低呈负相关",
+      "reportIds": [
+        "question_b55f7821-156e-4d38-b697-e85132549499"
+      ]
+    },
+    {
+      "source": "node_f4abc425-afbf-4aad-9d18-65ca4f1ac36c",
+      "target": "node_078d117e-5020-4ea4-8678-0ab14abbaf9a",
+      "relation": "广告推送最多（39条），代表高干扰端",
+      "reportIds": [
+        "question_b55f7821-156e-4d38-b697-e85132549499"
+      ]
+    },
+    {
+      "source": "node_d69b1ebd-9b1c-4908-9451-49c0999ed5eb",
+      "target": "node_a249a10e-89ee-45e8-a14b-ad0a42306402",
+      "relation": "提供商业化的多维反作弊识别能力",
+      "reportIds": [
+        "question_b55f7821-156e-4d38-b697-e85132549499"
+      ]
+    },
+    {
+      "source": "node_46e0ab3c-ee79-4c25-a3fe-0efcdde9abcd",
+      "target": "node_161dcd44-31fa-4857-97ed-bf0e195a681e",
+      "relation": "规范个人信息收集，影响归因数据回传能力",
+      "reportIds": [
+        "question_b55f7821-156e-4d38-b697-e85132549499"
+      ]
+    },
+    {
+      "source": "node_7f3dc151-7730-4c9b-ac23-a2c097b66290",
+      "target": "node_161dcd44-31fa-4857-97ed-bf0e195a681e",
+      "relation": "完善AI治理与法律责任，2026年成为可执法接口转化关键年",
+      "reportIds": [
+        "question_b55f7821-156e-4d38-b697-e85132549499"
+      ]
+    },
+    {
+      "source": "node_078d117e-5020-4ea4-8678-0ab14abbaf9a",
+      "target": "node_a249a10e-89ee-45e8-a14b-ad0a42306402",
+      "relation": "虚假安装识别是应对渠道分化的核心技术手段",
+      "reportIds": [
+        "question_b55f7821-156e-4d38-b697-e85132549499"
+      ]
     }
   ],
   "reports": [
@@ -1369,6 +1864,27 @@
       "objective": "在花费数据缺失、归因链路未打通的前提下，探索修复路径、替代评估方法及跨渠道优化的可执行方案",
       "summary": "花费数据缺失且归因链路未打通时，技术修复路径与MMM替代方法均无有效证据覆盖；2025 Q1基准显示TikTok考虑阶段效率优于Meta，但转化阶段Meta反超，当前仅可做方向性排查与手动导出应急。",
       "createdAt": "2026-10-10T03:23:21.704Z"
+    },
+    {
+      "questionId": "question_e8990eeb-883a-4791-80d5-32bd95181ad9",
+      "question": "那如何优化？",
+      "objective": "在花费数据缺失的现实约束下，探索Meta/X/TikTok渠道效果优化的可落地路径，涵盖数据修复方案、替代评估方法与渠道投放策略",
+      "summary": "2026年5-10月Meta/TikTok/X三渠道花费数据在Adjust中整体缺失（全量花费仅43.40，同期下载1341万），唯一确定性行动为数据治理，优化方案暂无法落地。",
+      "createdAt": "2026-10-12T03:28:20.502Z"
+    },
+    {
+      "questionId": "question_d0538de8-9a6a-4638-8a04-7aed6927eedd",
+      "question": "Untrusted Devices 拦截 73,943 次，这需要做什么处理",
+      "objective": "明确流量归因平台中 Untrusted Devices 拦截的判定机制、行业处理策略及对投放结算的影响，为制定合理的处置方案提供依据",
+      "summary": "9月Untrusted Devices拦截73,943次，占总安装1,753.5万次的0.42%，属低水位，短期无需紧急干预；但归因平台判定规则文档缺失，建议先导出拦截明细分析渠道与原因分布再制定处置策略。",
+      "createdAt": "2026-10-13T02:18:11.945Z"
+    },
+    {
+      "questionId": "question_b55f7821-156e-4d38-b697-e85132549499",
+      "question": "国内硬件厂商渠道表现分化这种现象怎么处理？",
+      "objective": "分析国内硬件厂商渠道（Oppo/Xiaomi/Vivo/传音等）安装量与转化率表现分化的外部成因，并探索针对性的优化与应对策略",
+      "summary": "2025-2026年实测显示国内硬件厂商渠道分化源于流量属性结构性差异：OPPO广告最少（仅2条）安装量最高（45.3万）且转化健康，传音转化率仅0.04%-0.01%系预装驱动；行业内缺乏针对分化的预算再分配实践证据，应对依赖内部归因审计。",
+      "createdAt": "2026-10-13T11:48:49.682Z"
     }
   ]
 }
