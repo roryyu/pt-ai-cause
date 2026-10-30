@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import type { TablePayload } from "@/lib/agent-events";
+import { CsvExportButton } from "@/components/data/CsvExportButton";
 
 /**
  * 数据表格：Agent 查询结果 / 数据预览 / 算子试运行结果共用
@@ -15,6 +16,7 @@ export function DataTable({
   note,
   defaultOpen = true,
   maxHeight = 320,
+  exportable = false,
 }: {
   title?: string;
   columns: string[];
@@ -22,6 +24,7 @@ export function DataTable({
   note?: string;
   defaultOpen?: boolean;
   maxHeight?: number;
+  exportable?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const [expanded, setExpanded] = useState(false);
@@ -48,19 +51,29 @@ export function DataTable({
 
   return (
     <div className="rounded-[var(--radius-sm)] border" style={{ borderColor: "var(--line)", background: "var(--surface)" }}>
-      {title && (
-        <button
-          onClick={() => setOpen(!open)}
-          className="flex w-full items-center justify-between px-4 py-2.5 text-left"
-        >
-          <span className="text-sm font-semibold" style={{ color: "var(--ink)" }}>
-            {title}
-            <span className="ml-2 text-xs font-normal" style={{ color: "var(--muted)" }}>
-              {rows.length} 行{note ? ` · ${note}` : ""}
-            </span>
-          </span>
-          {open ? <ChevronUp size={14} style={{ color: "var(--muted)" }} /> : <ChevronDown size={14} style={{ color: "var(--muted)" }} />}
-        </button>
+      {(title || exportable) && (
+        <div className="flex items-center justify-end gap-2 pr-4">
+          {title && (
+            <button
+              type="button"
+              onClick={() => setOpen(!open)}
+              className="flex min-w-0 flex-1 items-center justify-between gap-2 px-4 py-2.5 text-left"
+            >
+              <span className="text-sm font-semibold" style={{ color: "var(--ink)" }}>
+                {title}
+                <span className="ml-2 text-xs font-normal" style={{ color: "var(--muted)" }}>
+                  {rows.length} 行{note ? ` · ${note}` : ""}
+                </span>
+              </span>
+              {open ? <ChevronUp size={14} style={{ color: "var(--muted)" }} /> : <ChevronDown size={14} style={{ color: "var(--muted)" }} />}
+            </button>
+          )}
+          {exportable && (
+            <div className="shrink-0 py-2">
+              <CsvExportButton title={title} getRows={() => [columns, ...rows.map((row) => columns.map((column) => row[column]))]} />
+            </div>
+          )}
+        </div>
       )}
       {open && (
         <div className="overflow-auto" style={{ maxHeight }}>

@@ -38,3 +38,4 @@ docker-compose.override.yml
 # 发布打包产物（scripts/pack-release.sh 输出，不入库）
 dist/
 data/
+!components/data/
