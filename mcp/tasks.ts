@@ -21,14 +21,21 @@ import type {
  * 修改任一侧的持久化结构时须同步另一侧。
  *
  * 与路由的差异（有意为之）：
- * - 同步执行：工具调用阻塞到工作流完成，一次性返回最终结果（无 SSE）；
+ * - 工具调用阻塞到工作流完成才返回最终结果；传输层走 SSE（keep-alive + 可选进度通知），
+ *   避免长耗时请求被 ALB/代理 idle 超时掐断；
  * - 任务问答不写 Agent 轨迹明细（research_tasks 的 supervisor/worker/critic 行），
  *   仅落问答与答案；深度研究的子任务照常落库（研究详情页依赖）。
  */
 
-/** 进度只写 stderr 供运维观察；MCP 调用方拿到的是最终结果 */
+/** 进度只写 stderr 供运维观察；MCP 调用方拿到的是最终结果（带 progressToken 时另有进度通知） */
 const logSink = (event: AgentEvent): void => {
   if (event.type === "phase") console.error(`[MCP] ${event.label}`);
+};
+
+/** 组合 sink：stderr 运维日志恒开；调用方注入的进度 sink（MCP 进度通知）叠加执行 */
+const composeSink = (sink?: (event: AgentEvent) => void) => (event: AgentEvent): void => {
+  logSink(event);
+  sink?.(event);
 };
 
 /** 确保服务用户存在（口径同路由的 ensureUserExists） */
@@ -47,7 +54,7 @@ const errorText = (error: unknown): string => (error instanceof Error ? error.me
  * 任务问答：创建问答 → 多 Agent 工作流 → 压缩会话上下文 → 落库 → 返回最终答案。
  * 失败时把问答标记为 failed 再抛出（MCP 层转为 isError 结果）。
  */
-export async function runAskTask(input: AskTaskInput, actor: McpActor): Promise<AskTaskResult> {
+export async function runAskTask(input: AskTaskInput, actor: McpActor, sink?: (event: AgentEvent) => void): Promise<AskTaskResult> {
   await ensureUser(actor);
   const { history, prevSummary } = await buildConversationContext(input.parentQuestionId);
   const questionId = newId("question");
@@ -73,7 +80,7 @@ export async function runAskTask(input: AskTaskInput, actor: McpActor): Promise<
       questionId,
       question: input.question,
       history,
-      sink: logSink,
+      sink: composeSink(sink),
     });
     const contextSummary = await compressConversationContext(prevSummary, input.question, result.finalAnswer);
 
@@ -119,7 +126,7 @@ export async function runAskTask(input: AskTaskInput, actor: McpActor): Promise<
  * 深度研究：来源背景 + 图谱背景 → Planner/Executor/Synthesizer → 报告与子任务落库。
  * 失败时把问答与主任务标记为 failed 再抛出。
  */
-export async function runResearchTask(input: ResearchTaskInput, actor: McpActor): Promise<ResearchTaskResult> {
+export async function runResearchTask(input: ResearchTaskInput, actor: McpActor, sink?: (event: AgentEvent) => void): Promise<ResearchTaskResult> {
   await ensureUser(actor);
   // MCP 协议层已按 zod default 补齐；直接调用方省略时同样落 standard
   const depth = input.depth ?? "standard";
@@ -189,7 +196,7 @@ export async function runResearchTask(input: ResearchTaskInput, actor: McpActor)
       depth,
       sourceContext,
       graphContext,
-      sink: logSink,
+      sink: composeSink(sink),
       onStateChange: async (state) => {
         await prisma.researchTask.update({ where: { id: taskId }, data: { status: state } }).catch(() => {});
         await prisma.question.update({ where: { id: questionId }, data: { status: state } }).catch(() => {});

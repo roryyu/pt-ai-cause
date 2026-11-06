@@ -66,10 +66,13 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
   // 无状态：每个请求独立的 server + transport，响应结束即释放
   const server = createCauseMcpServer({
-    ask: (input) => runAskTask(input, actor),
-    research: (input) => runResearchTask(input, actor),
+    ask: (input, sink) => runAskTask(input, actor, sink),
+    research: (input, sink) => runResearchTask(input, actor, sink),
   });
-  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
+  // SSE 流式响应（同 /ask 页面的模式）：SDK 每 15 秒自动发 keep-alive 注释帧，
+  // 连接始终有数据流动，ALB 60 秒 idle 超时不会触发；最终结果仍是完整 JSON-RPC result。
+  // 不用 enableJsonResponse：一次性 JSON 会让 POST 静默挂起数分钟，必被 idle 超时掐断。
+  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   res.on("close", () => {
     void transport.close();
     void server.close();

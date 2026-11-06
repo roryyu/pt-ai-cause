@@ -24,8 +24,13 @@ dsh 主 agent ── run_cause_task ──> dsh-cause 插件 ── 启动子 ag
 
 - 独立进程：`npm run mcp`（`tsx mcp/server.ts`），与 Next.js 应用（3100）分开运行，共用 `.env` 与数据库。
   长耗时研究不受 Next 路由 `maxDuration` 与反向代理超时约束；单请求超时由 `CAUSE_MCP_REQUEST_TIMEOUT_MS` 控制（默认 15 分钟）。
-- 无状态 streamable-http：每个 `POST /mcp` 请求独立处理，`enableJsonResponse`，无会话 ID；`GET /mcp` 返回 405。
-- 同步执行：工具调用阻塞到工作流完成，一次性返回最终结果（无 SSE、无进度通知）；进度写 stderr 供运维观察。
+- 无状态 streamable-http：每个 `POST /mcp` 请求独立处理，无会话 ID；`GET /mcp` 返回 405。
+- SSE 流式响应（同 `/ask` 页面模式）：工具调用阻塞到工作流完成才给出最终结果，但响应以 `text/event-stream`
+  持续输出——SDK 每 15 秒自动发 keep-alive 注释帧，连接始终有数据流动，ALB 等按「空闲时长」计时的代理
+  （默认 60 秒 idle）不会掐断长调用。客户端带 `_meta.progressToken` 时，phase 事件另转为
+  `notifications/progress` 进度通知；stderr 运维日志恒开。
+  **不要用 `enableJsonResponse`**：一次性 JSON 会让 POST 静默挂起数分钟，必被 idle 超时掐断
+  （曾导致 Next 代理 30 秒 / ALB 60 秒处 500 + socket hang up，后端任务却照常跑完落库）。
 - 落库口径与两个 API 路由一致：MCP 产生的问答/研究出现在平台历史列表，可回看、可被洞察画布引用，
   `context.via = "mcp"` 标明来源。差异：MCP 任务问答不写 Agent 轨迹明细（`research_tasks` 的 supervisor/worker/critic 行），
   深度研究的子任务照常落库。**修改任一侧持久化结构时须同步另一侧**（`mcp/tasks.ts` ↔ `app/api/v1/{ask,research}/route.ts`；

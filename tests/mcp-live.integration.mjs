@@ -62,9 +62,10 @@ async function rpc(step, method, params, { expectResponse = true } = {}) {
     throw err;
   }
 
-  const elapsed = Date.now() - started;
+  const headersElapsed = Date.now() - started;
   const text = await res.text();
-  log(step, `← HTTP ${res.status} ${res.statusText}（耗时 ${elapsed}ms）`);
+  const elapsed = Date.now() - started; // SSE 模式下 headers 秒回、body 等流结束，计时以读完 body 为准
+  log(step, `← HTTP ${res.status} ${res.statusText}（耗时 ${elapsed}ms${headersElapsed < elapsed ? `，首字节 ${headersElapsed}ms` : ""}）`);
   console.log(`  headers: ${JSON.stringify(Object.fromEntries(res.headers.entries()))}`);
   console.log(`  body(${text.length} chars): ${text.slice(0, 4000)}${text.length > 4000 ? " …(截断)" : ""}`);
 
