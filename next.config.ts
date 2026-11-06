@@ -14,6 +14,13 @@ const securityHeaders = [
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
+  // rewrite 代理默认 30 秒即销毁上游连接（Next proxy-request 的 proxyTimeout || 30000），
+  // 而 /mcp 的 ask/deep_research 会挂起 10 秒～10 分钟：默认值会在 30 秒掐断长调用，
+  // 表现为 Next→MCP socket hang up/ECONNRESET、客户端收到纯文本 500、后端任务却照常跑完落库。
+  // 与 CAUSE_MCP_REQUEST_TIMEOUT_MS / 客户端 CAUSE_MCP_TIMEOUT_MS（默认 900000）对齐。
+  experimental: {
+    proxyTimeout: 900_000,
+  },
   // Prisma 7 客户端运行时（含 query compiler WASM）不参与打包，作为服务端外部依赖加载
   // duck-duck-scrape / @extractus/article-extractor（linkedom DOM 实现）同样外置，避免打包异常
   serverExternalPackages: ["@prisma/client", "duck-duck-scrape", "@extractus/article-extractor"],
