@@ -473,8 +473,9 @@ export function DataSourcesClient() {
 
           {selected?.type === "api" && (
             <>
-              <ApiAuthPanel key={selected.id} source={selected} onSaved={loadSources} />
-              <ApiSourcePanel key={selected.id} source={selected} />
+              {/* key 前缀区分面板：兄弟节点 key 必须唯一，仅用于切换数据源时重置内部状态 */}
+              <ApiAuthPanel key={`auth-${selected.id}`} source={selected} onSaved={loadSources} />
+              <ApiSourcePanel key={`panel-${selected.id}`} source={selected} />
             </>
           )}
 

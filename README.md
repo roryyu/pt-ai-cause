@@ -17,6 +17,7 @@
 | 统一语义层 | 指标字典 + 语义模型 CRUD，自然语言转译为 SemanticQuery 再转 SQL，口径统一、可校验 |
 | 算子层 | 数据分析算子（SQL 引擎）+ 研究算子（LLM 引擎）统一注册，工作流「算子优先」调度 |
 | 定时投递 | 对洞察文档执行定时邮件 / 图片导出，由 `POST /api/v1/schedules/run` + 外部 cron 驱动 |
+| MCP 服务 | 把任务问答与深度研究包装为 MCP 工具（streamable-http + 专用 Bearer Key），供 DeepSeek Harness 等外部 Agent 经子 agent 调用 |
 
 ## 技术栈
 
@@ -94,6 +95,7 @@ pt-ai-acquisition-cause/
 ├── hooks/use-agent-stream.ts # Agent SSE 流消费 Hook
 ├── prisma/schema.prisma      # 数据模型（16 个模型，含 AuthSession / OidcTransaction）
 ├── scripts/                  # 冒烟测试 / 数据种子 / 迁移修复等运维脚本
+├── mcp/                      # MCP 服务（ask / deep_research 工具，streamable-http，独立进程）
 ├── tests/                    # Vitest 单元测试
 └── doc/                      # 设计文档（design.md / codewiki.md / 开发进度等）
 ```
@@ -153,6 +155,7 @@ npm run typecheck      # 类型检查            npm run lint       # ESLint
 npm run test           # Vitest 全量测试     npm run test:watch # watch 模式
 npm run db:migrate     # 创建并应用迁移      npm run db:studio  # Prisma Studio
 npm run i18n:check     # 国际化键值检查      npm run local:down # 停止本地依赖
+npm run mcp            # MCP 服务（3101，对外暴露任务问答 / 深度研究）
 ```
 
 ## API 概览
@@ -171,6 +174,22 @@ npm run i18n:check     # 国际化键值检查      npm run local:down # 停止�
 
 完整路由清单见 [doc/codewiki.md § 4](doc/codewiki.md)。
 
+## MCP 服务（对外能力）
+
+把任务问答与深度研究包装为 MCP 工具，供 DeepSeek Harness 的 `dsh-cause` 插件（`pt-ai-dsh-stack/plugins/cause`）经子 agent 调用，也可供其他 MCP 客户端接入。独立进程（`mcp/`），与 Next.js 应用共用 `.env` 与数据库，直接复用 Agent 工作流与 Prisma 落库（不经 HTTP/SSE 路由）。
+
+| MCP 工具 | 能力 | 对应接口 |
+|------|------|------|
+| `ask` | 任务问答（自动路由数据分析 / 研究 / 直接回答），同步返回答全文 | `POST /api/v1/ask` |
+| `deep_research` | 深度研究（规划 → 检索深读 → 成稿），同步返回报告与引用 | `POST /api/v1/research` |
+
+- **运行**：`npm run mcp`（`tsx mcp/server.ts`），默认监听 `http://127.0.0.1:3101/mcp`（无状态 streamable-http）；`GET /health` 探活无需鉴权。
+- **鉴权**：专用 Bearer Key（`CAUSE_MCP_API_KEY` ≥32 字符，缺失拒绝启动），不依赖浏览器登录、不开放匿名；调用落库为服务用户（`context.via="mcp"`），平台历史可回看、可被洞察画布引用。
+- **同步执行**：工具调用阻塞到工作流完成一次性返回（深研约 2～10 分钟），客户端超时须覆盖该耗时；追问用 `parentQuestionId`、基于问答做深研用 `sourceQuestionId`。
+- **dsh 接入**：在 `pt-ai-dsh-stack` 根 `.env` 设 `CAUSE_MCP_URL=http://127.0.0.1:3101/mcp` + `CAUSE_MCP_TOKEN=<同 CAUSE_MCP_API_KEY>`。
+
+契约、入参/返回 payload 与联调详见 [doc/mcp-service.md](doc/mcp-service.md)。
+
 ## 开发状态
 
 - **已完成**：问答三路径路由与多轮上下文压缩、深度研究算子化链路（SearchOp / ExtractOp / CompareOp）、洞察画布与实时数据绑定、数据源 / 语义层 / 算子管理、定时邮件与图片投递、80 个单元测试全绿、类型检查与 ESLint 零告警
@@ -187,6 +206,7 @@ npm run i18n:check     # 国际化键值检查      npm run local:down # 停止�
 | [doc/detail.md](doc/detail.md) / [doc/usercase.md](doc/usercase.md) | 细化设计与用户用例 |
 | [doc/画布设计.md](doc/画布设计.md) / [doc/问答画布链路打通设计.md](doc/问答画布链路打通设计.md) | 洞察画布与问答→画布链路设计 |
 | [doc/数据源API和MCP的设计.md](doc/数据源API和MCP的设计.md) | 数据源 API 与 MCP 接入设计 |
+| [doc/mcp-service.md](doc/mcp-service.md) | MCP 服务：任务问答 / 深度研究对外工具、专用 Key 鉴权、运行与联调 |
 | [doc/开发进度*.md](doc/) | 每日开发进度总结 |
 
 ## 统一认证与 Foundation 消费

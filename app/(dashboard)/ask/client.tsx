@@ -393,7 +393,7 @@ export function AskClient({ initialQuestionId }: { initialQuestionId?: string })
               <TablesSection tables={state.tables} />
               {(state.answer || streaming) && (
                 <div className="rounded-[var(--radius-sm)] border p-5" style={{ borderColor: "var(--line)" }}>
-                  <MarkdownView content={state.answer} />
+                  <MarkdownView content={state.answer} exportTables={!streaming} />
                   {streaming && !state.error && (
                     state.answer ? (
                       /* 已有流式文本：行尾闪烁光标 */
@@ -473,7 +473,7 @@ export function AskClient({ initialQuestionId }: { initialQuestionId?: string })
               <TablesSection tables={viewing.answer.tables ?? []} />
               {viewing.answer.content ? (
                 <div className="rounded-[var(--radius-sm)] border p-5" style={{ borderColor: "var(--line)" }}>
-                  <MarkdownView content={viewing.answer.content} />
+                  <MarkdownView content={viewing.answer.content} exportTables />
                 </div>
               ) : viewing.answer.error ? (
                 <div className="rounded-[8px] px-3 py-2 text-xs" style={{ background: "var(--danger-pale)", color: "var(--danger)" }}>
@@ -644,7 +644,7 @@ function ThreadTurnView({ turn }: { turn: ThreadTurn }) {
         {open ? (
           <div className="border-t px-4 py-3" style={{ borderColor: "var(--line)" }}>
             {turn.answerContent ? (
-              <MarkdownView content={turn.answerContent} />
+              <MarkdownView content={turn.answerContent} exportTables />
             ) : (
               <p className="text-xs" style={{ color: "var(--muted)" }}>（该轮无回答）</p>
             )}
@@ -673,7 +673,7 @@ function TablesSection({ tables }: { tables: TablePayload[] }) {
     <>
       {tables.map((table, i) => {
         if (!isOperatorTable(table)) {
-          return <DataTable key={`${i}-${table.title}`} title={table.title} columns={table.columns} rows={table.rows} note={table.note} defaultOpen={false} />;
+          return <DataTable key={`${i}-${table.title}`} title={table.title} columns={table.columns} rows={table.rows} note={table.note} defaultOpen={false} exportable />;
         }
         // 仅在首个算子表位置渲染折叠分组，保持原有产出顺序
         if (i !== firstOperatorIdx) return null;
@@ -702,7 +702,7 @@ function OperatorResultsGroup({ tables }: { tables: TablePayload[] }) {
       {open && (
         <div className="space-y-2 border-t px-3 py-3" style={{ borderColor: "var(--line)" }}>
           {tables.map((table, i) => (
-            <DataTable key={`${i}-${table.title}`} title={table.title} columns={table.columns} rows={table.rows} note={table.note} defaultOpen={false} />
+            <DataTable key={`${i}-${table.title}`} title={table.title} columns={table.columns} rows={table.rows} note={table.note} defaultOpen={false} exportable />
           ))}
         </div>
       )}

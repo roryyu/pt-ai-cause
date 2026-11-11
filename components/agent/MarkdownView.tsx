@@ -1,13 +1,14 @@
 "use client";
 
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { type ExtraProps } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { CsvExportButton } from "@/components/data/CsvExportButton";
 
 /**
  * Markdown 渲染（Agent 回答 / 研究报告 / 报告正文共用）
  * 样式与设计系统对齐，链接可外跳
  */
-export function MarkdownView({ content }: { content: string }) {
+export function MarkdownView({ content, exportTables = false }: { content: string; exportTables?: boolean }) {
   return (
     <div className="markdown-body text-sm leading-relaxed" style={{ color: "var(--ink-soft)" }}>
       <ReactMarkdown
@@ -64,9 +65,19 @@ export function MarkdownView({ content }: { content: string }) {
             );
           },
           pre: (props) => <pre className="my-3" {...props} />,
-          table: (props) => (
-            <div className="my-3 overflow-x-auto">
-              <table className="w-full border-collapse text-xs" {...props} />
+          table: ({ node, ...props }) => (
+            <div className="my-3">
+              {exportTables && node && (
+                <div className="mb-2 flex justify-end">
+                  <CsvExportButton
+                    title={`问答表格-${node.position?.start.line ?? 1}`}
+                    getRows={() => markdownTableRows(node)}
+                  />
+                </div>
+              )}
+              <div className="overflow-x-auto">
+                <table className="w-full border-collapse text-xs" {...props} />
+              </div>
             </div>
           ),
           thead: (props) => (
@@ -104,4 +115,24 @@ export function MarkdownView({ content }: { content: string }) {
       </ReactMarkdown>
     </div>
   );
+}
+
+type MarkdownElement = NonNullable<ExtraProps["node"]>;
+
+/** 从解析后的表格节点读取纯文本，保留表头、列顺序和单元格内换行。 */
+function markdownTableRows(node: MarkdownElement): string[][] {
+  if (node.tagName === "tr") {
+    return [node.children
+      .filter((child) => child.type === "element" && (child.tagName === "th" || child.tagName === "td"))
+      .map(markdownCellText)];
+  }
+  return node.children.flatMap((child) => child.type === "element" ? markdownTableRows(child) : []);
+}
+
+function markdownCellText(node: MarkdownElement["children"][number]): string {
+  if (node.type === "text") return node.value;
+  if (node.type !== "element") return "";
+  if (node.tagName === "br") return "\n";
+  if (node.tagName === "img") return String(node.properties.alt ?? "");
+  return node.children.map(markdownCellText).join("");
 }

@@ -74,23 +74,93 @@ export interface SearchResult {
   source: "bing" | "duckduckgo" | "firecrawl";
 }
 
+// ─── 低质量来源过滤 ────────────────────────────────────────────────────────────
+// 百科/词典/问答/文库类页面多为名词解释（如「消费是什么」），不构成研究证据，
+// 在搜索入口统一剔除；剔除后无结果就返回空，宁缺毋滥。
+
+/** 低质量域名：百科、词典、知道问答、文库、商业名词库 */
+const LOW_QUALITY_HOST =
+  /(^|\.)(baike\.baidu\.com|baike\.so\.com|baike\.com|wikipedia\.org|wiki\.mbalib\.com|mbalib\.com|zhidao\.baidu\.com|wenku\.baidu\.com|docin\.com|doc88\.com|book118\.com)$/i;
+
+/** 汉语词典/查词站点域名（汉语国学、汉语查、查字典、汉典等）：查词页不构成研究证据 */
+const DICT_HOST = /(hanyuguoxue|hanyucha|chazidian|zdic|cidian|zidian|dict\.cn)/i;
+
+/** 名词解释型标题：「什么是X」「X是什么」「X的定义」「X的意思/解释/词义辨析/拼音造句」等 */
+const DEFINITION_TITLE =
+  /(是什么|什么是|名词解释|术语解释|词语解释|意思解释|的定义|定义是什么|定义与含义|的意思|的解释|词义|辨析|拼音|造句|近义词|反义词|同义词)/;
+
+/** 词典/邮箱门户/登录注册类标题：查词页与邮箱首页不构成研究证据 */
+const JUNK_TITLE =
+  /(词典|辞典|字典|詞典|辭典|检视|檢視|邮箱|郵箱|免费邮|免費郵|电子邮箱|電子郵箱|登录入口|请登录|請登錄|注册账号|註冊賬號)/;
+
+/** 判断搜索结果是否为名词解释类低质量来源 */
+export function isLowQualitySource(title: string, url: string): boolean {
+  if (DEFINITION_TITLE.test(title) || JUNK_TITLE.test(title)) return true;
+  try {
+    const hostname = new URL(url).hostname;
+    // mail.* 一律为邮箱门户首页（如 mail.163.com）
+    if (/^mail\./i.test(hostname)) return true;
+    if (DICT_HOST.test(hostname)) return true;
+    return LOW_QUALITY_HOST.test(hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 弱语素二元组：「针对/关于/通过」一类功能词不构成主题相关性。
+ * 查词页标题常复述查询中的功能词（如查「针对」返回「针对的意思」），
+ * 仅此类重合不算相关，避免词典页借功能词穿过相关性闸门。
+ */
+const STOP_BIGRAMS = new Set(["针对", "关于", "对于", "通过", "进行", "以及", "其中", "可以", "需要"]);
+
+/**
+ * 查询相关性闸门：结果标题+摘要须与查询共享至少一个词（中文二元组或拉丁词）。
+ * 搜索引擎对机器人客户端会「非空降级」返回毫无相关的页面（如搜投放指标返回
+ * 邮箱首页），条数非空不代表相关，故在入口按词面重合度兜底拦截。
+ */
+export function isRelevantToQuery(query: string, title: string, snippet: string): boolean {
+  const hay = `${title} ${snippet}`.toLowerCase();
+  const latinWords = query.toLowerCase().match(/[a-z0-9]{2,}/g) ?? [];
+  if (latinWords.some((w) => hay.includes(w))) return true;
+  const cjkSegs = query.match(/[一-鿿]{2,}/g) ?? [];
+  for (const seg of cjkSegs) {
+    for (let i = 0; i + 2 <= seg.length; i++) {
+      const bigram = seg.slice(i, i + 2);
+      if (STOP_BIGRAMS.has(bigram)) continue; // 功能词重合不算主题相关
+      if (hay.includes(bigram)) return true;
+    }
+  }
+  // 查询无可提取词面（纯符号等）时不拦截
+  return latinWords.length === 0 && cjkSegs.length === 0;
+}
+
+function filterLowQuality(results: SearchResult[], query: string): SearchResult[] {
+  return results.filter(
+    (r) => !isLowQualitySource(r.title, r.url) && isRelevantToQuery(query, r.title, r.snippet),
+  );
+}
+
 /**
  * 网页搜索（纯 Node 进程内，无需 Key / 服务 / Docker）：
  * 主源 DDG Lite（轻量 HTML 端点，反爬宽松，结果相关度高且带摘要）
  * → DDG HTML（旧端点兜底）→ duck-duck-scrape（库直连，部分网络可用）
  * → Bing RSS（官方 XML feed）→ Bing HTML（最后兜底）
  * 注：Bing 对机器人客户端会降级返回低相关结果，故置于链路末位
+ * 所有结果统一经低质量来源过滤（百科/名词解释类不进证据池）
  */
 export async function webSearch(query: string, maxResults = 6): Promise<SearchResult[]> {
   const q = query.trim().slice(0, 300);
   if (!q) return [];
 
-  let results = await searchDdgLite(q, maxResults);
-  if (results.length === 0) results = await searchDuckDuckGo(q, maxResults);
-  if (results.length === 0) results = await searchDdgLib(q, maxResults);
-  if (results.length === 0) results = await searchBingRss(q, maxResults);
-  if (results.length === 0) results = await searchBing(q, maxResults);
-  return results;
+  // 多取数条弥补过滤损耗，保证过滤后仍尽量凑足 maxResults
+  const fetchCount = maxResults + 4;
+  let results = filterLowQuality(await searchDdgLite(q, fetchCount), q);
+  if (results.length === 0) results = filterLowQuality(await searchDuckDuckGo(q, fetchCount), q);
+  if (results.length === 0) results = filterLowQuality(await searchDdgLib(q, fetchCount), q);
+  if (results.length === 0) results = filterLowQuality(await searchBingRss(q, fetchCount), q);
+  if (results.length === 0) results = filterLowQuality(await searchBing(q, fetchCount), q);
+  return results.slice(0, maxResults);
 }
 
 /** 主源：DuckDuckGo Lite（极简 HTML 端点，结构稳定：a.result-link 标题 + 相邻 tr 的 td.result-snippet 摘要） */

@@ -64,17 +64,18 @@ function mockOperatorsHappyPath() {
   });
 }
 
-/** 网关：首调返回规划，其后返回证据抽取结果；报告流式两段 */
+/** 网关：按 system prompt 内容分发（内在知识直答与 Planner/Extractor 并行，调用顺序不定） */
 function mockGateway() {
-  let calls = 0;
-  chatCompletionMock.mockImplementation(async () => {
-    calls += 1;
-    return calls === 1 ? PLAN_JSON : FINDINGS_JSON;
+  chatCompletionMock.mockImplementation(async (messages) => {
+    const system = String(messages?.[0]?.content ?? "");
+    if (system.includes("研究规划")) return PLAN_JSON;
+    if (system.includes("仅凭你训练所得的知识")) return "内在知识直答内容";
+    return FINDINGS_JSON;
   });
   chatCompletionStreamMock.mockImplementation(
     (async function* () {
       yield "# 研究报告\n";
-      yield "正文内容";
+      yield "正文内容 [1][2][3]";
     }) as never,
   );
 }
@@ -134,7 +135,7 @@ describe("深度研究算子化链路", () => {
     // compare 工具事件可观测
     expect(events.some((e) => e.type === "tool_call" && e.tool === "compare")).toBe(true);
     expect(events.some((e) => e.type === "phase" && e.phase === "analyzing")).toBe(true);
-    expect(result.report).toBe("# 研究报告\n正文内容");
+    expect(result.report).toBe("# 研究报告\n正文内容 [1][2][3]");
   });
 
   it("检索算子失败时静默降级：不深读、不比对，任务仍完成", async () => {
@@ -143,10 +144,11 @@ describe("深度研究算子化链路", () => {
       return failResult("不应被调用");
     });
     // 无材料时抽取产出空发现 → 子问题走无证据兜底文案，不触发比对
-    let calls = 0;
-    chatCompletionMock.mockImplementation(async () => {
-      calls += 1;
-      return calls === 1 ? PLAN_JSON : JSON.stringify({ findings: [] });
+    chatCompletionMock.mockImplementation(async (messages) => {
+      const system = String(messages?.[0]?.content ?? "");
+      if (system.includes("研究规划")) return PLAN_JSON;
+      if (system.includes("仅凭你训练所得的知识")) return "内在知识直答内容";
+      return JSON.stringify({ findings: [] });
     });
     const { result, states } = await run();
 
@@ -159,7 +161,7 @@ describe("深度研究算子化链路", () => {
       expect(sub.findings[0]).toContain("未检索到能直接回答");
     }
     expect(states).toEqual(["planning", "collecting", "analyzing", "writing", "completed"]);
-    expect(result.report).toBe("# 研究报告\n正文内容");
+    expect(result.report).toBe("# 研究报告\n正文内容 [1][2][3]");
   });
 
   it("compare 算子失败时静默降级：报告照常生成且不注入比对块", async () => {
@@ -174,7 +176,7 @@ describe("深度研究算子化链路", () => {
     const streamCall = chatCompletionStreamMock.mock.calls[0];
     const userMsg = streamCall?.[0]?.find((m) => m.role === "user")?.content ?? "";
     expect(userMsg).not.toContain("多源比对结论");
-    expect(result.report).toBe("# 研究报告\n正文内容");
+    expect(result.report).toBe("# 研究报告\n正文内容 [1][2][3]");
   });
 
   // 长摘要不再被误判为「已深读」：旧逻辑用 text.length>300 跳过 ExtractOp，
@@ -229,5 +231,103 @@ describe("深度研究算子化链路", () => {
       // 全程无 page_excerpt 证据（quote 缺失），子问题仍完成但不产出正文摘录
       expect(sub.evidence?.filter((m) => m.kind === "page_excerpt")).toHaveLength(0);
     }
+  });
+
+  // 引用收敛：参考文献只保留报告正文实际引用的来源，未采纳的检索结果不充数
+  it("未被正文引用的来源不进参考文献", async () => {
+    mockOperatorsHappyPath();
+    chatCompletionStreamMock.mockImplementation(
+      (async function* () {
+        yield "# 研究报告\n仅引用 [1] 支撑结论";
+      }) as never,
+    );
+    const { result, events } = await run();
+    expect(result.citations.map((c) => c.url)).toEqual(["https://a.example.com/1"]);
+    // citations 事件推送的也是收敛后的清单
+    const citationEvents = events.filter((e) => e.type === "citations");
+    const last = citationEvents[citationEvents.length - 1];
+    expect(last?.type === "citations" ? last.citations : []).toHaveLength(1);
+  });
+
+  it("正文没有引用任何编号时参考文献为空（没有结果就是没有结果）", async () => {
+    mockOperatorsHappyPath();
+    chatCompletionStreamMock.mockImplementation(
+      (async function* () {
+        yield "# 研究报告\n证据不足，目前无法给出确定结论";
+      }) as never,
+    );
+    const { result } = await run();
+    expect(result.citations).toHaveLength(0);
+    expect(result.review?.passed).toBe(false);
+  });
+
+  // 断号重排：正文只引用 [1][3] 时参考文献重排为连续 [1][2]，报告正文同步改写
+  it("断号引用重排为连续编号，报告与 answer 事件同步改写", async () => {
+    runOperatorMock.mockImplementation(async (id) => {
+      if (id === "search") {
+        return okResult(
+          [...SEARCH_ROWS, { title: "来源三", url: "https://c.example.com/3", snippet: "摘要三" }],
+          ["title", "url", "snippet"],
+        );
+      }
+      if (id === "extract") {
+        return okResult([{ point: "要点", quote: "原文中实际提供的事实与限定条件。" }], ["point", "quote"]);
+      }
+      return failResult("跳过比对");
+    });
+    chatCompletionStreamMock.mockImplementation(
+      (async function* () {
+        yield "# 研究报告\n甲 [1]，丙 [3]";
+      }) as never,
+    );
+    const { result, events } = await run();
+    expect(result.citations.map((c) => [c.no, c.url])).toEqual([
+      [1, "https://a.example.com/1"],
+      [2, "https://c.example.com/3"],
+    ]);
+    expect(result.report).toBe("# 研究报告\n甲 [1]，丙 [2]");
+    // 全文替换事件携带重排后的报告，前端流式视图与落库一致
+    const answerEvent = events.find((e) => e.type === "answer");
+    expect(answerEvent?.type === "answer" ? answerEvent.content : "").toBe("# 研究报告\n甲 [1]，丙 [2]");
+  });
+
+  // 内在知识直答通道：与 web 检索并行，成稿时融合进 Synthesizer 上下文
+  it("内在知识直答与 web 证据融合进报告合成", async () => {
+    mockOperatorsHappyPath();
+    const { result, events } = await run();
+
+    const streamCall = chatCompletionStreamMock.mock.calls[0];
+    const userMsg = streamCall?.[0]?.find((m) => m.role === "user")?.content ?? "";
+    expect(userMsg).toContain("模型内在知识直答（训练知识，未经检索验证）");
+    expect(userMsg).toContain("内在知识直答内容");
+    expect(result.knowledgeAnswer).toBe("内在知识直答内容");
+    // 直答步骤事件可观测且完成
+    const knowledgeSteps = events.filter(
+      (e) => e.type === "step" && e.stepId === "dr_knowledge" && e.status === "done",
+    );
+    expect(knowledgeSteps).toHaveLength(1);
+  });
+
+  it("直答通道失败静默降级：报告照常生成且不注入直答块", async () => {
+    mockOperatorsHappyPath();
+    chatCompletionMock.mockImplementation(async (messages) => {
+      const system = String(messages?.[0]?.content ?? "");
+      if (system.includes("研究规划")) return PLAN_JSON;
+      if (system.includes("仅凭你训练所得的知识")) throw new Error("直答通道故障");
+      return FINDINGS_JSON;
+    });
+    const { result, events, states } = await run();
+
+    const streamCall = chatCompletionStreamMock.mock.calls[0];
+    const userMsg = streamCall?.[0]?.find((m) => m.role === "user")?.content ?? "";
+    expect(userMsg).not.toContain("模型内在知识直答");
+    expect(result.knowledgeAnswer).toBe("");
+    expect(result.report).toBe("# 研究报告\n正文内容 [1][2][3]");
+    expect(states).toEqual(["planning", "collecting", "analyzing", "writing", "completed"]);
+    // 降级原因可在步骤事件中追溯
+    const doneStep = events.find(
+      (e) => e.type === "step" && e.stepId === "dr_knowledge" && e.status === "done",
+    );
+    expect(doneStep?.type === "step" ? doneStep.detail : "").toContain("直答通道故障");
   });
 });
