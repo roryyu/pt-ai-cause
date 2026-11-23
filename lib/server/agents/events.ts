@@ -70,6 +70,8 @@ export interface AgentRunContext {
     tables: TablePayload[];
     charts: ChartSpec[];
   };
+  /** 已完成 API 查询的有界快照；worker 中断后仍提供给综合节点。 */
+  apiQueryResults: string[];
   /** 研究 Agent 产出 */
   researchFindings: {
     notes: string[];
@@ -101,6 +103,7 @@ export function createRunContext(params: {
     history: params.history ?? [],
     sink: params.sink,
     dataFindings: { sql: [], tables: [], charts: [] },
+    apiQueryResults: [],
     researchFindings: { notes: [], citations: [], searchedQueries: [], searchSnippets: [], fetchedUrls: [] },
     route: null,
     critique: null,

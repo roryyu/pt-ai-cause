@@ -10,6 +10,7 @@ tsconfig.tsbuildinfo
 .env
 .env.local
 .env*.local
+.secrets
 
 # 运行时落盘目录（服务器经 bind mount 挂宿主目录，镜像内保持空骨架）
 .deliveries

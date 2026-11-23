@@ -225,6 +225,9 @@ async function synthesizerNode(state: WorkflowStateType): Promise<Partial<Workfl
   ctx.sink({ type: "step", stepId, agent: "synthesizer", label: "汇总发现，生成结论", status: "running" });
 
   const sections: string[] = [];
+  if (ctx.apiQueryResults.length > 0) {
+    sections.push(`## API 查询原始证据与可用性（独立于 worker 总结保留，按来源分别解释）\n${ctx.apiQueryResults.join("\n\n")}`);
+  }
   if (state.dataSummary) {
     sections.push(`## 数据分析 Agent 产出\n${state.dataSummary}`);
   }

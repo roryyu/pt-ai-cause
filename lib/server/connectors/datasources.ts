@@ -2,6 +2,8 @@ import { prisma } from "@/lib/db";
 import { env } from "@/lib/env";
 import type { ApiSourceConfig } from "./api";
 import type { McpSourceConfig } from "./mcp";
+import { Ga4PropertyIdSchema } from "./google-analytics";
+import { GoogleAdsCustomerIdSchema, GOOGLE_ADS_ENDPOINT } from "./google-ads";
 
 /**
  * 数据源注册与解析（design.md 5.1 数据接入层）
@@ -43,7 +45,10 @@ function parseCustomConfig(
 ): Pick<ResolvedDataSource, "url" | "apiConfig" | "mcpConfig"> & { status: string } {
   if (type === "api") {
     const api = config as unknown as ApiSourceConfig;
-    return { apiConfig: api, status: api.endpoint ? "active" : "misconfigured" };
+    const configured = api.protocol === "google_ads"
+      ? api.endpoint === GOOGLE_ADS_ENDPOINT && api.authType === "adc" && GoogleAdsCustomerIdSchema.optional().safeParse(api.customerId).success && GoogleAdsCustomerIdSchema.optional().safeParse(api.loginCustomerId).success
+      : api.protocol === "ga4" ? Ga4PropertyIdSchema.safeParse(api.propertyId).success : Boolean(api.endpoint);
+    return { apiConfig: api, status: configured ? "active" : "misconfigured" };
   }
   if (type === "mcp") {
     const mcp = config as unknown as McpSourceConfig;
@@ -117,6 +122,8 @@ export async function resolveDataSource(id: string): Promise<ResolvedDataSource 
 /** 数据源对外展示的脱敏 endpoint */
 export function displayEndpoint(source: ResolvedDataSource): string {
   if (source.type === "web") return "bing.com / duckduckgo.com";
+  if (source.type === "api" && source.apiConfig?.protocol === "ga4") return `Google Analytics 4 · properties/${source.apiConfig.propertyId ?? "未配置"}`;
+  if (source.type === "api" && source.apiConfig?.protocol === "google_ads") return `Google Ads · ${source.apiConfig.customerId ?? "待发现/选择账户"}`;
   if (source.type === "api") return maskUrl(source.apiConfig?.endpoint);
   if (source.type === "mcp") return maskUrl(source.mcpConfig?.proxyUrl);
   return maskUrl(source.url);

@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
+import { withDeadline, waitWithSignal, QueryTimeoutError, GOOGLE_QUERY_TIMEOUT_MS, API_QUERY_TIMEOUT_MS, CACHE_OPERATION_TIMEOUT_MS } from "./deadline";
 import { prisma } from "@/lib/db";
 import { newId } from "@/lib/server/ids";
+import { parseGa4Request } from "./google-analytics";
+import { parseGoogleAdsRequest } from "./google-ads";
 import {
   executeRestRequest, parseBody, resolveRequestUrl,
   type ApiCallResult, type ApiSourceConfig, type RestRequestInput,
@@ -114,11 +117,11 @@ export function resolveTtlSeconds(params?: Record<string, string>, today?: strin
 }
 
 /** 限流等待：同一 sourceId 两次调用间隔 ≥ MIN_CALL_INTERVAL_MS */
-async function throttle(sourceId: string): Promise<void> {
+async function throttle(sourceId: string, signal: AbortSignal): Promise<void> {
   const last = lastCallAt.get(sourceId) ?? 0;
   const wait = MIN_CALL_INTERVAL_MS - (Date.now() - last);
   lastCallAt.set(sourceId, Date.now() + Math.max(0, wait));
-  if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+  if (wait > 0) await waitWithSignal(wait, signal);
 }
 
 /**
@@ -130,20 +133,43 @@ export async function cachedRestRequest(
   input: RestRequestInput,
   options: CachedRestRequestOptions,
 ): Promise<CachedApiCallResult> {
-  const cacheKey = computeApiCacheKey(input.method, config.endpoint, input.path, input.params);
+  const startedAt = Date.now();
+  const timeout = config.protocol === "ga4" || config.protocol === "google_ads" ? GOOGLE_QUERY_TIMEOUT_MS : API_QUERY_TIMEOUT_MS;
+  try {
+    return await withDeadline((signal) => cachedRequestWithinDeadline(config, input, options, signal), timeout);
+  } catch (error) {
+    if (!(error instanceof QueryTimeoutError)) throw error;
+    return { status: 504, body: { error: error.message, code: error.code }, contentType: "application/json",
+      elapsedMs: Date.now() - startedAt, truncated: false, retryable: false, fromCache: false, cacheState: "miss" };
+  }
+}
+
+async function cachedRequestWithinDeadline(
+  config: ApiSourceConfig, input: RestRequestInput, options: CachedRestRequestOptions, signal: AbortSignal,
+): Promise<CachedApiCallResult> {
+  // GA4 的 POST 请求必须按完整报告参数、属性和数据源隔离，不能仅按 URL 缓存。
+  const ga4Action = config.protocol === "ga4" ? parseGa4Request(config, input) : null;
+  const adsAction = config.protocol === "google_ads" ? parseGoogleAdsRequest(config, input) : null;
+  const cacheKey = adsAction
+    ? createHash("sha256").update(JSON.stringify({ version: "google-ads-v26-1", sourceId: options.sourceId, action: adsAction })).digest("hex")
+    : ga4Action
+    ? createHash("sha256").update(JSON.stringify({ version: "ga4-v1", sourceId: options.sourceId, action: ga4Action })).digest("hex")
+    : computeApiCacheKey(input.method, config.endpoint, input.path, input.params);
   const url = resolveRequestUrl(config.endpoint, input.path, input.params);
 
   // 1. 查缓存（fresh 直接返回）
   let cached: { body: string; contentType: string; status: number; elapsedMs: number; expiresAt: Date } | null = null;
   try {
-    const record = await prisma.apiQueryCache.findUnique({ where: { cacheKey } });
+    const record = await withDeadline(() => prisma.apiQueryCache.findUnique({ where: { cacheKey } }), CACHE_OPERATION_TIMEOUT_MS, signal);
+    signal.throwIfAborted();
     if (record) {
       cached = record;
       if (record.expiresAt.getTime() > Date.now()) {
-        await prisma.apiQueryCache.update({
-          where: { cacheKey },
-          data: { hitCount: { increment: 1 } },
-        });
+        // 计数失败或卡住不能丢弃已命中的有效结果。
+        await withDeadline(() => prisma.apiQueryCache.update({
+          where: { cacheKey }, data: { hitCount: { increment: 1 } },
+        }), CACHE_OPERATION_TIMEOUT_MS, signal).catch(() => {});
+        signal.throwIfAborted();
         return {
           status: record.status,
           contentType: record.contentType,
@@ -156,21 +182,25 @@ export async function cachedRestRequest(
       }
     }
   } catch (error) {
+    signal.throwIfAborted();
     console.warn("[api-cache] 缓存读取失败，降级直连:", error instanceof Error ? error.message : error);
   }
 
   // 2. 未命中 → 限流 + 实时请求（429/5xx 指数退避重试，优先遵循 Retry-After）
-  if (!options.skipThrottle) await throttle(options.sourceId);
+  signal.throwIfAborted();
+  if (!options.skipThrottle) await throttle(options.sourceId, signal);
   let result: ApiCallResult;
   try {
-    result = await executeRestRequest(config, input, { maxBodyBytes: options.maxBodyBytes });
-    for (let attempt = 0; attempt < MAX_RETRIES && (result.status === 429 || result.status >= 500); attempt++) {
-      await new Promise((resolve) => setTimeout(resolve, computeBackoffMs(attempt, result.retryAfterMs)));
-      result = await executeRestRequest(config, input, { maxBodyBytes: options.maxBodyBytes });
+    result = await executeRestRequest(config, input, { maxBodyBytes: options.maxBodyBytes, signal });
+    for (let attempt = 0; attempt < MAX_RETRIES && result.retryable !== false && (result.status === 429 || result.status >= 500); attempt++) {
+      await waitWithSignal(computeBackoffMs(attempt, result.retryAfterMs), signal);
+      signal.throwIfAborted();
+      result = await executeRestRequest(config, input, { maxBodyBytes: options.maxBodyBytes, signal });
     }
   } catch (error) {
+    signal.throwIfAborted();
     // 网络异常且有旧缓存 → stale 降级
-    if (cached) {
+    if (cached && !adsAction) {
       return {
         status: cached.status,
         contentType: cached.contentType,
@@ -184,17 +214,18 @@ export async function cachedRestRequest(
     throw error;
   }
 
+  signal.throwIfAborted();
   // 3. 上游 429/5xx 且有旧缓存 → stale 降级
-  if ((result.status === 429 || result.status >= 500) && cached) {
+  if (result.retryable !== false && (result.status === 429 || result.status >= 500) && cached && !adsAction) {
     return { ...result, fromCache: true, cacheState: "stale", body: parseBody(cached.body, cached.contentType), status: cached.status };
   }
 
   // 4. 成功响应（2xx）写入缓存；body 以原始文本存储
   if (result.status >= 200 && result.status < 300 && !result.truncated) {
-    const ttl = options.ttlSeconds ?? resolveTtlSeconds(input.params);
+    const ttl = options.ttlSeconds ?? (adsAction ? (adsAction.action === "report" ? 300 : 30) : ga4Action ? 300 : resolveTtlSeconds(input.params));
     const rawBody = typeof result.body === "string" ? result.body : JSON.stringify(result.body);
     try {
-      await prisma.apiQueryCache.upsert({
+      await withDeadline(() => prisma.apiQueryCache.upsert({
         where: { cacheKey },
         create: {
           id: newId("api_cache"),
@@ -216,8 +247,9 @@ export async function cachedRestRequest(
           hitCount: 0,
           expiresAt: new Date(Date.now() + ttl * 1000),
         },
-      });
+      }), CACHE_OPERATION_TIMEOUT_MS, signal);
     } catch (error) {
+      signal.throwIfAborted();
       console.warn("[api-cache] 缓存写入失败（不影响本次结果）:", error instanceof Error ? error.message : error);
     }
   }
