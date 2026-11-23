@@ -98,6 +98,7 @@ export const GOOGLE_ADS_QUERY_GUIDE = `Google Ads 广告投放数据使用 query
 - 无客户 ID：path="accounts", body="{}" 发现直接授权账户。多个账户请让用户选择；path="account", body={"customerId":"1234567890"} 获取账户名称、manager、时区、币种。
 - 经理账户：path="clients", body={"customerId":"经理ID"} 列出子账户。选择实际投放客户后，后续 body 携带 customerId=客户ID、loginCustomerId=有授权关系的经理ID。不要在经理账户上查询投放指标。
 - path="campaigns"：独立于指标的 campaign ID/name/status 列表（排除 REMOVED）。支持 limit 1~100 和 afterId；nextAfterId 非空需续页，未取完不能声称全部。
+- 参数纪律：body 只接受本指南列举的模板字段，多加 name/campaignName/metrics 等任何额外字段会被直接拒绝；不支持按名称过滤，查特定 campaign 必须先 campaigns 取列表再在结果中自行按名称筛选。report 的 campaignId 必须取自 campaigns 结果，不得猜测或用名称代替。method 必须显式传 POST（缺省 GET 会被拒绝）。
 - path="conversionActions"：该客户转化跟踪账户的安装/首次打开动作目录（含 resourceName、type、status）。请明确选择单一正确来源，多个动作不能盲目相加或擅自替用户选择；ANDROID_INSTALLS_ALL_OTHER_APPS 是其他应用安装口径。
 - path="report", body={"campaignId":"123","startDate":"2026-11-01","endDate":"2026-11-07","installAction":"customers/1234567890/conversionActions/456"}；单次最多366天，返回每日曝光、点击、ctr、cost、installs、cpi。installAction 可省略，此时 installs/cpi 是 null（未配置，不是0）。指标以账户时区、币种为准，安装使用指定动作 all_conversions，按广告互动日期归因，不等同商店下载数，也不能等同 Adjust 安装。
 - ctr 为比例；CPI=花费/安装，零安装为 null。区间 CTR/CPI 必须先分别累计分子分母再相除，不能平均每日比率。truncated=true 时按 nextStartDate 继续 report（原 endDate 不变），未取完不能算完整总量。

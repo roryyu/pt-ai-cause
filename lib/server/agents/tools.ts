@@ -539,7 +539,7 @@ export function createApiSourceTool(ctx: AgentRunContext, sources: ResolvedDataS
       const startedAt = Date.now();
       const source = apiSources.find((s) => s.id === input.sourceId);
       const requestKey = JSON.stringify(input);
-      ctx.sink({ type: "tool_call", stepId, tool: "query_api_source", input: { sourceId: input.sourceId, path: input.path, graphqlQuery: input.graphqlQuery?.slice(0, 120) } });
+      ctx.sink({ type: "tool_call", stepId, tool: "query_api_source", input: { sourceId: input.sourceId, path: input.path, method: input.method, body: input.body?.slice(0, 300), graphqlQuery: input.graphqlQuery?.slice(0, 120) } });
       const previous = terminalResults.get(requestKey);
       if (previous) {
         ctx.sink({ type: "tool_result", stepId, tool: "query_api_source", summary: "该条件已确认失败或无数据，继续其他查询" });
@@ -618,7 +618,10 @@ export function createApiSourceTool(ctx: AgentRunContext, sources: ResolvedDataS
           return JSON.stringify({ status: result.status, body: result.body, truncated: result.truncated, fromCache: result.fromCache, cacheState: result.cacheState });
         } catch (error) {
           const google = source.apiConfig.protocol === "ga4" || source.apiConfig.protocol === "google_ads";
-          const msg = error instanceof QueryTimeoutError ? error.message : google ? "Google 查询配置或调用失败，请核对操作参数；其他数据源可继续查询" : error instanceof Error ? error.message : String(error);
+          // Google 源保留具体错误（模板校验等参数级信息，不含凭证；上游错误已经 googleAdsError 脱敏、不会走到这里），
+          // 否则 Agent 看不到哪个参数错，无法自我纠正，一次校验失败即成死局
+          const detail = error instanceof Error ? error.message : String(error);
+          const msg = error instanceof QueryTimeoutError ? error.message : google ? `Google 查询失败：${detail.slice(0, 300)}。请核对操作参数；其他数据源可继续查询` : detail;
           ctx.sink({ type: "tool_result", stepId, tool: "query_api_source", summary: `失败: ${msg}` });
           return JSON.stringify({ error: msg, ...(error instanceof QueryTimeoutError ? { status: 504, code: error.code } : {}) });
         }

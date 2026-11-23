@@ -5,6 +5,8 @@ import { createRunContext, nextStepId } from "./events";
 import { runDataAnalystWorker, runResearchWorker } from "./workers";
 import { extractCitationNos, renumberCitations, remapCitationText } from "@/lib/server/research-graph/review";
 import { ROUTING_PROMPT, DIRECT_ANSWER_PROMPT, CRITIC_PROMPT, SYNTHESIZER_PROMPT } from "./prompts";
+import { extractStructuredRows } from "./structured-output";
+import type { ResponseSchemaSpec } from "./response-schema";
 
 /**
  * Supervisor 多 Agent 编排（design.md 4.3.1 / 7.2）
@@ -322,6 +324,8 @@ export interface RunWorkflowOptions {
   question: string;
   history?: Array<{ role: "user" | "assistant"; content: string }>;
   sink: (event: AgentEvent) => void;
+  /** 结构化返回契约（doc/periodic.md P0）：传入后从原始查询表格抽取扁平行数组，随结果返回 */
+  responseSchema?: ResponseSchemaSpec;
 }
 
 export interface WorkflowResult {
@@ -331,6 +335,10 @@ export interface WorkflowResult {
   researchFindings: AgentRunContext["researchFindings"];
   critique: AgentRunContext["critique"];
   elapsedMs: number;
+  /** responseSchema 抽取结果；未传 schema 或抽取失败时为 null */
+  structured: { rows: Record<string, unknown>[] } | null;
+  /** 抽取失败原因（structured 为 null 且传了 schema 时非空）；不影响 Markdown 答案 */
+  structuredError: string | null;
 }
 
 /**
@@ -361,8 +369,6 @@ export async function runAgentWorkflow(options: RunWorkflowOptions): Promise<Wor
     { recursionLimit: 60 },
   );
 
-  const elapsedMs = Date.now() - ctx.startedAt;
-
   // 引用收敛：参考文献只保留回答/研究发现实际引用的来源编号，并重排为连续编号；
   // 检索到但未被采纳的结果（含名词解释类低质量页面）不再充数
   let finalAnswer = finalState.finalAnswer;
@@ -378,13 +384,36 @@ export async function runAgentWorkflow(options: RunWorkflowOptions): Promise<Wor
     ctx.sink({ type: "answer", content: finalAnswer });
   }
 
+  // 结构化输出：调用方传入 responseSchema 时，以原始查询表格为唯一数值来源抽取扁平行数组。
+  // 抽取失败不丢弃 Markdown 答案：structured 置 null 并记录原因，消费方本轮放弃、下轮重试（幂等同步无副作用）
+  let structured: WorkflowResult["structured"] = null;
+  let structuredError: string | null = null;
+  if (options.responseSchema) {
+    const stepId = nextStepId(ctx);
+    ctx.sink({ type: "step", stepId, agent: "structured", label: "结构化输出抽取", status: "running" });
+    try {
+      structured = await extractStructuredRows({
+        spec: options.responseSchema,
+        question: options.question,
+        tables: ctx.dataFindings.tables,
+        dataSummary: finalState.dataSummary || undefined,
+      });
+      ctx.sink({ type: "step", stepId, agent: "structured", label: `结构化输出完成（${structured.rows.length} 行）`, status: "done" });
+    } catch (error) {
+      structuredError = error instanceof Error ? error.message : String(error);
+      ctx.sink({ type: "step", stepId, agent: "structured", label: "结构化输出抽取失败", status: "error", detail: structuredError });
+    }
+  }
+
   return {
     route: finalState.route,
     finalAnswer,
     dataFindings: ctx.dataFindings,
     researchFindings: ctx.researchFindings,
     critique: ctx.critique,
-    elapsedMs,
+    elapsedMs: Date.now() - ctx.startedAt,
+    structured,
+    structuredError,
   };
 }
 

@@ -15,6 +15,7 @@ import {
   buildConversationContext, compressConversationContext,
 } from "@/lib/server/agents/conversation";
 import type { AgentEvent } from "@/lib/server/agents/events";
+import { responseSchemaSpec } from "@/lib/server/agents/response-schema";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -26,6 +27,8 @@ const AskRequestSchema = z.object({
   dataSourceIds: z.array(z.string()).optional(),
   /** 多轮追问：父问题 ID（取其问答构建对话历史） */
   parentQuestionId: z.string().optional(),
+  /** 结构化返回契约（可选，口径同 MCP ask 工具）：从原始查询表格抽取扁平行数组落 answer.structured */
+  responseSchema: responseSchemaSpec.optional(),
 });
 
 /**
@@ -57,6 +60,7 @@ export async function POST(request: Request) {
           kind: "ask",
           ...(input.dataSourceIds ? { dataSourceIds: input.dataSourceIds } : {}),
           ...(input.parentQuestionId ? { parentQuestionId: input.parentQuestionId } : {}),
+          ...(input.responseSchema ? { responseSchema: input.responseSchema } : {}),
         },
         status: "analyzing",
       },
@@ -69,6 +73,7 @@ export async function POST(request: Request) {
           question: input.question,
           history,
           sink: (event: AgentEvent) => send(event),
+          responseSchema: input.responseSchema,
         });
 
         // 完成一轮对话后增量压缩会话上下文（已有摘要 + 本轮问答），供下一轮追问复用
@@ -89,6 +94,8 @@ export async function POST(request: Request) {
             critique: result.critique,
             elapsedMs: result.elapsedMs,
             contextSummary,
+            ...(result.structured ? { structured: result.structured } : {}),
+            ...(result.structuredError ? { structuredError: result.structuredError } : {}),
           }),
         ) as object;
         await prisma.question.update({

@@ -70,6 +70,7 @@ export async function runAskTask(input: AskTaskInput, actor: McpActor, sink?: (e
         via: "mcp",
         ...(input.dataSourceIds ? { dataSourceIds: input.dataSourceIds } : {}),
         ...(input.parentQuestionId ? { parentQuestionId: input.parentQuestionId } : {}),
+        ...(input.responseSchema ? { responseSchema: input.responseSchema } : {}),
       },
       status: "analyzing",
     },
@@ -81,6 +82,7 @@ export async function runAskTask(input: AskTaskInput, actor: McpActor, sink?: (e
       question: input.question,
       history,
       sink: composeSink(sink),
+      responseSchema: input.responseSchema,
     });
     const contextSummary = await compressConversationContext(prevSummary, input.question, result.finalAnswer);
 
@@ -95,6 +97,8 @@ export async function runAskTask(input: AskTaskInput, actor: McpActor, sink?: (e
       critique: result.critique,
       elapsedMs: result.elapsedMs,
       contextSummary,
+      ...(result.structured ? { structured: result.structured } : {}),
+      ...(result.structuredError ? { structuredError: result.structuredError } : {}),
     })) as object;
     await prisma.question.update({
       where: { id: questionId },
@@ -111,6 +115,8 @@ export async function runAskTask(input: AskTaskInput, actor: McpActor, sink?: (e
       citations: result.researchFindings.citations,
       critique: result.critique ? { score: result.critique.score, passed: result.critique.passed } : null,
       elapsedMs: result.elapsedMs,
+      structured: result.structured,
+      ...(result.structuredError ? { structuredError: result.structuredError } : {}),
     };
   } catch (error) {
     const message = errorText(error);

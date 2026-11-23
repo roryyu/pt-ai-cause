@@ -46,6 +46,8 @@ const WORKFLOW_RESULT = {
   researchFindings: { notes: [], citations: [{ no: 1, title: "数据源", url: "https://example.com" }], searchedQueries: [] },
   critique: null,
   elapsedMs: 1234,
+  structured: null,
+  structuredError: null,
 };
 
 const RESEARCH_RESULT = {
@@ -171,6 +173,26 @@ describe("任务问答 runAskTask", () => {
     const update = mocks.prisma.question.update.mock.calls[0]?.[0] as { data: { status: string } };
     expect(update.data.status).toBe("failed");
   });
+
+  it("responseSchema 透传工作流，structured 随返回与落库（doc/periodic.md P0）", async () => {
+    const rows = [{ statDate: "2026-11-20", campaignNetwork: "c1", cost: 100 }];
+    mocks.runAgentWorkflow.mockResolvedValue({ ...WORKFLOW_RESULT, structured: { rows } });
+    const responseSchema = {
+      fields: [
+        { name: "statDate", type: "date" as const },
+        { name: "campaignNetwork", type: "string" as const },
+        { name: "cost", type: "number" as const },
+      ],
+    };
+    const result = await runAskTask({ question: "查 c1 昨日消耗", responseSchema }, ACTOR);
+
+    expect(mocks.runAgentWorkflow).toHaveBeenCalledWith(expect.objectContaining({ responseSchema }));
+    expect(result.structured).toEqual({ rows });
+    const update = mocks.prisma.question.update.mock.calls[0]?.[0] as { data: { answer: { structured?: unknown } } };
+    expect(update.data.answer.structured).toEqual({ rows });
+    const create = mocks.prisma.question.create.mock.calls[0]?.[0] as { data: { context: { responseSchema?: unknown } } };
+    expect(create.data.context.responseSchema).toEqual(responseSchema);
+  });
 });
 
 describe("深度研究 runResearchTask", () => {
@@ -229,7 +251,7 @@ describe("MCP 协议装配 createCauseMcpServer", () => {
       ask: async (input) => {
         received.push({ tool: "ask", input });
         if (deps.ask) return deps.ask(input);
-        return { questionId: "question_1", status: "completed", route: "direct", answer: "答案", chartCount: 0, tableCount: 0, citations: [], critique: null, elapsedMs: 1 };
+        return { questionId: "question_1", status: "completed", route: "direct", answer: "答案", chartCount: 0, tableCount: 0, citations: [], critique: null, elapsedMs: 1, structured: null };
       },
       research: async (input) => {
         received.push({ tool: "deep_research", input });
