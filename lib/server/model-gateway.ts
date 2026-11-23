@@ -54,9 +54,10 @@ export async function* chatCompletionStream(messages: OpenAI.ChatCompletionMessa
   function parse(frame: string): string | null {
     const data = frame.split("\n").filter(line => line.startsWith("data:")).map(line => line.slice(5).trimStart()).join("\n");
     if (!data || data === "[DONE]") return null;
-    const event = JSON.parse(data) as { type?: string; delta?: unknown; error?: { code?: string }; response?: { status?: string; error?: { code?: string } } };
+    const event = JSON.parse(data) as { type?: string; delta?: unknown; error?: { code?: string }; response?: { status?: string; error?: { code?: string }; incomplete_details?: { reason?: string } } };
     if (["error", "response.failed", "response.incomplete"].includes(event.type ?? "")) {
-      throw new Error(`Foundation generation failed (${event.error?.code ?? event.response?.error?.code ?? event.type})`);
+      const reason = event.error?.code ?? event.response?.error?.code ?? event.response?.incomplete_details?.reason ?? event.type;
+      throw new Error(`Foundation generation failed (${reason})`);
     }
     if (event.type === "response.completed") {
       if (event.response?.status !== "completed") throw new Error("Foundation terminal response is invalid");

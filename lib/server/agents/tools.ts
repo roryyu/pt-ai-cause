@@ -495,6 +495,23 @@ function preserveApiResult(ctx: AgentRunContext, output: string, sourceId: strin
     outcome: failed ? "unavailable" : partial ? "partial" : empty ? "empty" : "success",
     ...(failed ? { nonFatal: true, hint: API_FAILURE_CONTINUE_HINT } : empty ? { hint: API_EMPTY_CONTINUE_HINT } : {}),
   });
+  // API 直查结果同步注册为证据表格：结构化抽取以 dataFindings.tables 为唯一数值来源，
+  // 不注册则直查补齐的计划在 structured 行中整体缺失（实测 XC_iOS：Markdown 答案有数、抽取 0 行）。
+  // 只注册非失败的对象行；重复调用（命中缓存）同题同行不重复注册。
+  const recordRows = (rows ?? []).filter((r): r is Record<string, unknown> => !!r && typeof r === "object" && !Array.isArray(r));
+  if (!failed && recordRows.length > 0 && recordRows.length <= 200) {
+    const table: TablePayload = {
+      title: `API 直查 · ${sourceName ?? sourceId}`,
+      columns: [...new Set(recordRows.flatMap((r) => Object.keys(r)))],
+      rows: recordRows,
+      note: `${recordRows.length} 行${partial ? " · 结果被截断，仅含部分行" : ""}`,
+    };
+    const duplicated = ctx.dataFindings.tables.some((t) => t.title === table.title && JSON.stringify(t.rows) === JSON.stringify(table.rows));
+    if (!duplicated) {
+      ctx.dataFindings.tables.push(table);
+      ctx.sink({ type: "table", table });
+    }
+  }
   const result = JSON.stringify(payload);
   // 快照仅供综合兜底；保留完整行，不能把裁剪后的样本当作全量结果。
   const snapshot = JSON.parse(result) as Record<string, unknown>;

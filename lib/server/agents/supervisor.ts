@@ -270,7 +270,9 @@ ${sections.join("\n\n")}`;
         { role: "system", content: SYNTHESIZER_PROMPT },
         { role: "user", content: userContent },
       ],
-      { temperature: 0.3, maxTokens: 4096 },
+      // 多计划 × 多天的明细报告 + 缺口分析实测可超 4096 输出 token，
+      // 超限会触发 response.incomplete 使整个 ask 失败（2026-11-23 联调）。
+      { temperature: 0.3, maxTokens: 8192 },
     )) {
       answer += chunk;
       ctx.sink({ type: "chunk", content: chunk });

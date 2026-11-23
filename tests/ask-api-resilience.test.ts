@@ -205,6 +205,28 @@ describe("入口与部分证据保留", () => {
     expect(adjust.outcome).toBe("success");
   });
 
+  it("API 直查成功行注册为证据表格供结构化抽取，重复调用不重复注册", async () => {
+    const rows = [
+      { statDate: "2026-11-11", campaignNetwork: "XC_iOS", cost: 1050.09, installs: 370 },
+      { statDate: "2026-11-12", campaignNetwork: "XC_iOS", cost: 1036.95, installs: 363 },
+    ];
+    vi.mocked(fetch).mockResolvedValue(Response.json({ rows }));
+    const ctx = createRunContext({ questionId: "q", question: "查询", sink: () => {} });
+    const query = createApiSourceTool(ctx, sources);
+    await query.invoke({ sourceId: sources[0]!.id });
+    expect(ctx.dataFindings.tables).toHaveLength(1);
+    expect(ctx.dataFindings.tables[0]).toMatchObject({ title: "API 直查 · Adjust", rows });
+    await query.invoke({ sourceId: sources[0]!.id });
+    expect(ctx.dataFindings.tables).toHaveLength(1);
+  });
+
+  it("API 空结果不注册证据表格", async () => {
+    vi.mocked(fetch).mockResolvedValue(Response.json({ rows: [] }));
+    const ctx = createRunContext({ questionId: "q", question: "查询", sink: () => {} });
+    await createApiSourceTool(ctx, sources).invoke({ sourceId: sources[0]!.id });
+    expect(ctx.dataFindings.tables).toHaveLength(0);
+  });
+
   it("所有数据源不可用仍完成问答，将缺失原因交给综合而不是补零", async () => {
     mocks.mode = 403;
     vi.mocked(fetch).mockRejectedValue(new Error("Adjust 网络不可用"));
