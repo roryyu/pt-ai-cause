@@ -3,7 +3,7 @@ import { executeReadOnlyQuery } from "@/lib/server/connectors/postgres";
 import { DEMO_SEMANTIC_MODELS, type SemanticModelDef } from "@/lib/server/semantic/semantic-query";
 import { listAllSemanticModels } from "@/lib/server/semantic/model-store";
 import { listDataSources, type ResolvedDataSource } from "@/lib/server/connectors/datasources";
-import { cachedRestRequest } from "@/lib/server/connectors/api-cache";
+import { cachedRestRequest, isAdjustEndpoint } from "@/lib/server/connectors/api-cache";
 import { parseCsvTable, csvTableToObjects } from "@/lib/server/connectors/csv";
 import { modelDimensionSlugs, persistApiRowsToDataTable, shouldPersist } from "@/lib/server/integrations/api-ingest";
 import { env } from "@/lib/env";
@@ -388,8 +388,10 @@ async function fetchApiReportRows(
     }
   }
   // 分解落库：真实响应（miss 且未截断）按全维度幂等 upsert 至语义模型对应的 data 表，
-  // 供后续本地 SQL/算子复用；失败仅告警不影响取数（命中缓存/截断响应不落）
-  if (model && result.cacheState === "miss" && !result.truncated && table.rows.length > 0 && shouldPersist(model, dimSlugs)) {
+  // 供后续本地 SQL/算子复用；失败仅告警不影响取数（命中缓存/截断响应不落）。
+  // Adjust 源受数据落地开关（ADJUST_QUERY_CACHE_ENABLED，与查询缓存/定时同步共用，默认关闭）控制
+  const ingestEnabled = !isAdjustEndpoint(source.apiConfig!.endpoint) || env.ADJUST_QUERY_CACHE_ENABLED;
+  if (model && ingestEnabled && result.cacheState === "miss" && !result.truncated && table.rows.length > 0 && shouldPersist(model, dimSlugs)) {
     const persisted = await persistApiRowsToDataTable(model, table.rows);
     if (persisted > 0) notes.push(`已分解落库 ${persisted} 行至 ${model.schema}.${model.table}，后续可本地查询`);
   }

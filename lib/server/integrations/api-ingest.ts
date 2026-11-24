@@ -11,6 +11,7 @@
  * 落库条件（由调用方 fetchApiReportRows 判定，全部满足才落）：
  * - 缓存未命中（miss）且 2xx、未截断、行数 > 0
  * - 请求维度 slug 覆盖模型全部维度（行粒度与表主键一致）；部分聚合结果不落
+ * - Adjust 源需数据落地开关开启（env.ADJUST_QUERY_CACHE_ENABLED，与查询缓存/定时同步共用，默认关闭）
  *
  * 安全性：标识符一律经 IDENT_PATTERN 校验并双引号包裹，值全部参数化；
  * 内部异常仅 console.warn，绝不抛出——落库是延伸能力，不得影响取数主流程。

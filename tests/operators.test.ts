@@ -1,15 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // 算子测试：隔离 DB 与环境变量依赖（与 semantic-models.test.ts 同模式）
-vi.mock("@/lib/env", () => ({
-  env: {
-    DATABASE_URL: "postgresql://localhost:5432/test?schema=cause",
-    MODEL_GATEWAY_BASE_URL: "https://gateway.test/v1",
-    MODEL_GATEWAY_API_KEY: "test-key",
-    MODEL_GATEWAY_DEFAULT_MODEL: "test-model",
-    MODEL_GATEWAY_TIMEOUT_MS: 30000,
-  },
+const envMock = vi.hoisted(() => ({
+  DATABASE_URL: "postgresql://localhost:5432/test?schema=cause",
+  MODEL_GATEWAY_BASE_URL: "https://gateway.test/v1",
+  MODEL_GATEWAY_API_KEY: "test-key",
+  MODEL_GATEWAY_DEFAULT_MODEL: "test-model",
+  MODEL_GATEWAY_TIMEOUT_MS: 30000,
+  ADJUST_QUERY_CACHE_ENABLED: true,
 }));
+vi.mock("@/lib/env", () => ({ env: envMock }));
 vi.mock("@/lib/server/connectors/postgres", () => ({
   executeReadOnlyQuery: vi.fn(),
 }));
@@ -381,6 +381,7 @@ const ADJUST_SOURCE = {
 
 describe("统一取数分流层（API 源自动本地缓存+API 直查，PG 源本地 SQL）", () => {
   beforeEach(() => {
+    envMock.ADJUST_QUERY_CACHE_ENABLED = true;
     listAllModelsMock.mockResolvedValue([...DEMO_SEMANTIC_MODELS, ADJUST_MODEL] as never);
     listDataSourcesMock.mockResolvedValue([ADJUST_SOURCE]);
     cachedRestRequestMock.mockReset();
@@ -480,6 +481,22 @@ describe("统一取数分流层（API 源自动本地缓存+API 直查，PG 源�
     });
     expect(result.ok).toBe(true);
     expect(persistMock).not.toHaveBeenCalled();
+  });
+
+  it("filter：数据落地开关关闭（默认）时 Adjust 源 miss 全维度响应也不分解落库，取数不受影响", async () => {
+    envMock.ADJUST_QUERY_CACHE_ENABLED = false;
+    cachedRestRequestMock.mockResolvedValue({
+      status: 200, contentType: "text/csv",
+      body: "network,country_code,day,installs,register_events,firstdeposit_events\nweb,us,2026-09-03,100,42,7\n",
+      elapsedMs: 400, truncated: false, fromCache: false, cacheState: "miss",
+    } as never);
+    const result = await runOperator("filter", {
+      model: "semantic_model_adjust_daily", from: "2026-09-03", to: "2026-09-03",
+    });
+    expect(result.ok).toBe(true);
+    expect(result.rows[0]).toMatchObject({ network: "web", installs: 100 });
+    expect(persistMock).not.toHaveBeenCalled();
+    expect(result.notes.join(" ")).not.toContain("已分解落库");
   });
 
   // ─── aggregate 扩维落库与自动回退 ────────────────────────────────────
