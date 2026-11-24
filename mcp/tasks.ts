@@ -83,6 +83,7 @@ export async function runAskTask(input: AskTaskInput, actor: McpActor, sink?: (e
       history,
       sink: composeSink(sink),
       responseSchema: input.responseSchema,
+      bufferOutput: true,
     });
     const contextSummary = await compressConversationContext(prevSummary, input.question, result.finalAnswer);
 
@@ -203,6 +204,7 @@ export async function runResearchTask(input: ResearchTaskInput, actor: McpActor,
       sourceContext,
       graphContext,
       sink: composeSink(sink),
+      bufferOutput: true,
       onStateChange: async (state) => {
         await prisma.researchTask.update({ where: { id: taskId }, data: { status: state } }).catch(() => {});
         await prisma.question.update({ where: { id: questionId }, data: { status: state } }).catch(() => {});

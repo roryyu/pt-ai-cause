@@ -132,6 +132,7 @@ describe("任务问答 runAskTask", () => {
         context: expect.objectContaining({ kind: "ask", via: "mcp" }),
       }),
     }));
+    expect(mocks.runAgentWorkflow).toHaveBeenCalledWith(expect.objectContaining({ bufferOutput: true }));
     // 答案与压缩摘要落库（供历史回看与追问）
     const update = mocks.prisma.question.update.mock.calls[0]?.[0] as { data: { status: string; answer: Record<string, unknown> } };
     expect(update.data.status).toBe("completed");
@@ -201,6 +202,7 @@ describe("深度研究 runResearchTask", () => {
 
     const questionCreate = mocks.prisma.question.create.mock.calls[0]?.[0] as { data: { context: Record<string, unknown> } };
     expect(questionCreate.data.context).toMatchObject({ kind: "deep_research", via: "mcp", depth: "standard" });
+    expect(mocks.runDeepResearch).toHaveBeenCalledWith(expect.objectContaining({ bufferOutput: true }));
     // 主任务 + 1 个子任务
     expect(mocks.prisma.researchTask.create).toHaveBeenCalledTimes(2);
     const subCreate = mocks.prisma.researchTask.create.mock.calls[1]?.[0] as { data: { parentTaskId: string; agentType: string } };
