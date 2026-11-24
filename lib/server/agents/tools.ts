@@ -45,7 +45,7 @@ export function runOperatorToolDescription(models?: SemanticModelDef[]): string 
 - transform 派生指标：input {from?, to?}，按月输出投放归因派生指标：CPI（花费/下载）、CPM、CTR、点击注册率、FD 率、RD 率、ROI（充值金额/花费）
 - join 跨源关联：input {from?, to?}，投放日汇总 × 投放计划表，按渠道×承接端对比实际效果与计划累计口径
 所有算子只按「语义指标 key + 维度 id」取数：数据源路由（本地 PG 库 / 外部 API 源的本地缓存+API 直查）由算子依据指标所属数据源自动决定，你无需也不能指定 sourceId、path 或上游 slug。查外部 API 源（如 Adjust）的最新或明细数据同样用 aggregate、filter——指定语义指标 key 与维度 id 即可，目标日期超出本地范围时算子会自动直连 API 取回。
-可用指标（metric 参数取值·各数据源平等构成统一数据集合）。指标 id 若形如「表名.指标」（如 adjust_daily_metrics.impressions）表示该指标同时存在于多个数据源，须带表名限定精确指定来源；裸 id（如 spend）表示全局唯一。同名指标分属不同源时是彼此独立的数据（如 BI 同步的 channel_daily_metrics.impressions 与 Adjust 归因的 adjust_daily_metrics.impressions），按需分别取用、交叉验证，不假设哪个优先：
+可用指标（metric 参数取值·各数据源平等构成统一数据集合）。指标 id 若形如「表名.指标」（如 adjust_daily_metrics.impressions）表示该指标同时存在于多个数据源，须带表名限定精确指定来源；裸 id（如 spend）表示全局唯一。同名指标分属不同源时是彼此独立的数据（如 BI 同步的 channel_daily_metrics.impressions 与 Adjust 归因的 adjust_daily_metrics.impressions），无优先级——问题涉及该指标时须用各限定 key 每个来源分别取数，最后汇总对比，不得只取其一：
 ${operatorMetricCatalogSummary(models)}
 各模型可用维度（aggregate 的 groupBy / filter 的 filters 键）：
 ${operatorDimensionCatalogSummary(models)}
@@ -650,7 +650,7 @@ export function createApiSourceTool(ctx: AgentRunContext, sources: ResolvedDataS
     },
     {
       name: "query_api_source",
-      description: `调用已注册的外部 API 数据源获取数据（只读，经查询缓存与限流，命中缓存不消耗上游配额）。REST 源传 path/method/params/body，CSV 响应自动结构化为表格；GraphQL 源传 graphqlQuery/variables（禁止 mutation）。整个任务最多调用 6 次。注意：已建模的报告类指标/维度取数应优先用 run_operator（aggregate/filter 会依据指标所属数据源自动直连对应 API 源），本工具用于 Google Ads campaign/投放报告、GA4 官方 SDK 报告及语义层未建模的自由 API 探索。可用数据源：\n${externalSourcesSummary(apiSources)}`,
+      description: `调用已注册的外部 API 数据源获取数据（只读，经查询缓存与限流，命中缓存不消耗上游配额）。REST 源传 path/method/params/body，CSV 响应自动结构化为表格；GraphQL 源传 graphqlQuery/variables（禁止 mutation）。整个任务最多调用 6 次。注意：已建模的报告类指标/维度取数应优先用 run_operator（aggregate/filter 会依据指标所属数据源自动直连对应 API 源），本工具用于 Google Ads campaign/投放报告、GA4 官方 SDK 报告及语义层未建模的自由 API 探索。全源覆盖：本地算子/SQL 取数完成后，问题涉及 GA4/Google Ads 可提供的指标时仍须调用本工具补齐对应来源，最后分源汇总（用户明确限定单一来源时除外）。可用数据源：\n${externalSourcesSummary(apiSources)}`,
       schema: z.object({
         sourceId: z.string().describe("数据源 ID（见工具描述中的可用数据源）"),
         path: z.string().optional().describe("REST：endpoint 之后的相对路径，如 csv_report（勿重复基础路径）；GA4 仅支持 runReport 或 metadata；Google Ads：accounts/account/clients/campaigns/conversionActions/report"),
