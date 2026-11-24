@@ -33,6 +33,8 @@ vi.mock("@/lib/server/auth/session", () => ({
 import { GET as listGet, POST } from "@/app/api/v1/datasources/route";
 import { PUT } from "@/app/api/v1/datasources/[id]/route";
 import { prisma } from "@/lib/db";
+import { ga4SourceConfig } from "@/lib/server/connectors/google-analytics";
+import { googleAdsSourceConfig } from "@/lib/server/connectors/google-ads";
 
 describe("GraphQL 只读防护 assertReadOnlyGraphQL", () => {
   it("允许匿名查询与 query 操作", () => {
@@ -150,6 +152,49 @@ describe("数据源注册接口分类型校验 POST /api/v1/datasources", () => 
     });
   });
 
+  it("Google Ads 没有客户 ID 也可注册，不保存前端夹带的认证", async () => {
+    const res = await post({ type: "api", name: "Google Ads", protocol: "google_ads", authToken: "discard-me", endpoint: "https://evil.test", keyFilename: "/fake/key" });
+    expect(res.status).toBe(201);
+    expect(vi.mocked(prisma.dataSource.create).mock.calls[0]![0].data).toMatchObject({ connectorId: "google-ads", config: googleAdsSourceConfig() });
+    expect(JSON.stringify(vi.mocked(prisma.dataSource.create).mock.calls)).not.toContain("discard-me");
+  });
+
+  it.each(["123", "123-456-7890", "1 OR 1=1"])("Google Ads 拒绝非法客户 ID %s", async (customerId) => {
+    expect((await post({ type: "api", name: "Ads", protocol: "google_ads", customerId })).status).toBe(400);
+    expect(prisma.dataSource.create).not.toHaveBeenCalled();
+  });
+
+  it("GA4 只需数字属性 ID，服务端固定官方 endpoint 与 ADC", async () => {
+    const res = await post({ type: "api", name: "Google Analytics 4", protocol: "ga4", propertyId: "123456789" });
+    expect(res.status).toBe(201);
+    expect(vi.mocked(prisma.dataSource.create).mock.calls[0]![0].data).toMatchObject({
+      type: "api", connectorId: "google-analytics", config: ga4SourceConfig("123456789"),
+    });
+  });
+
+  it.each([undefined, "G-ABC123", "properties/123", "0", "", "1/../../2"])("GA4 拒绝非法 Property ID：%s", async (propertyId) => {
+    const res = await post({ type: "api", name: "GA4", protocol: "ga4", propertyId });
+    expect(res.status).toBe(400);
+    expect(prisma.dataSource.create).not.toHaveBeenCalled();
+  });
+
+  it("GA4 不保存客户端夹带的 endpoint、Token 或凭证路径", async () => {
+    const res = await post({
+      type: "api", name: "GA4", protocol: "ga4", propertyId: "123",
+      endpoint: "https://untrusted.example", authToken: "test-not-a-real-secret", headers: { Authorization: "test" },
+      keyFilename: "/test/not-a-real-key.json",
+    });
+    expect(res.status).toBe(201);
+    expect(vi.mocked(prisma.dataSource.create).mock.calls[0]![0].data.config).toEqual(ga4SourceConfig("123"));
+    expect(await res.text()).not.toContain("test-not-a-real-secret");
+  });
+
+  it("普通 REST 不接受 ADC", async () => {
+    const res = await post({ type: "api", name: "REST", protocol: "rest", endpoint: "https://example.test", authType: "adc" });
+    expect(res.status).toBe(400);
+    expect(prisma.dataSource.create).not.toHaveBeenCalled();
+  });
+
   it("合法 mcp 数据源注册成功", async () => {
     const res = await post({
       type: "mcp",
@@ -235,6 +280,42 @@ describe("更新数据源认证配置 PUT /api/v1/datasources/[id]", () => {
     expect(res.status).toBe(404);
   });
 
+  it("Google Ads 可以保存客户并清空旧经理 ID", async () => {
+    vi.mocked(prisma.dataSource.findUnique).mockResolvedValue({ ...apiRecord, config: googleAdsSourceConfig("1234567890", "9876543210") } as never);
+    expect((await put(apiRecord.id, { customerId: "1234567891", loginCustomerId: "" })).status).toBe(200);
+    expect(vi.mocked(prisma.dataSource.update).mock.calls[0]![0].data.config).toEqual(googleAdsSourceConfig("1234567891"));
+  });
+
+  it.each([{ endpoint: "https://evil.test" }, { authToken: "test" }, { protocol: "rest" }, { propertyId: "123" }])("Google Ads 拒绝改写受限配置 %j", async (body) => {
+    vi.mocked(prisma.dataSource.findUnique).mockResolvedValue({ ...apiRecord, config: googleAdsSourceConfig() } as never);
+    expect((await put(apiRecord.id, body)).status).toBe(400);
+    expect(prisma.dataSource.update).not.toHaveBeenCalled();
+  });
+
+  it("GA4 可以更新名称和 Property ID，保留固定 SDK 配置", async () => {
+    vi.mocked(prisma.dataSource.findUnique).mockResolvedValue({ ...apiRecord, config: ga4SourceConfig("123") } as never);
+    const res = await put(apiRecord.id, { name: "GA4 新属性", propertyId: "456" });
+    expect(res.status).toBe(200);
+    expect(vi.mocked(prisma.dataSource.update).mock.calls[0]![0].data).toEqual({ name: "GA4 新属性", config: ga4SourceConfig("456") });
+  });
+
+  it.each([
+    { endpoint: "https://other.example" }, { protocol: "rest" }, { authType: "bearer" },
+    { authToken: "test-token" }, { headers: { Authorization: "test" } }, { propertyId: "G-123" },
+  ])("GA4 拒绝替换 SDK 认证或非法属性：%j", async (body) => {
+    vi.mocked(prisma.dataSource.findUnique).mockResolvedValue({ ...apiRecord, config: ga4SourceConfig("123") } as never);
+    const res = await put(apiRecord.id, body);
+    expect(res.status).toBe(400);
+    expect(prisma.dataSource.update).not.toHaveBeenCalled();
+  });
+
+  it("不会将已有 Adjust 数据源原地改为 GA4", async () => {
+    vi.mocked(prisma.dataSource.findUnique).mockResolvedValue(apiRecord as never);
+    const res = await put(apiRecord.id, { protocol: "ga4", propertyId: "123" });
+    expect(res.status).toBe(400);
+    expect(prisma.dataSource.update).not.toHaveBeenCalled();
+  });
+
   it("非法 endpoint 返回 400 且不落库", async () => {
     vi.mocked(prisma.dataSource.findUnique).mockResolvedValue(apiRecord as never);
     const res = await put("data_source_adjust", { endpoint: "not-a-url" });
@@ -246,6 +327,25 @@ describe("更新数据源认证配置 PUT /api/v1/datasources/[id]", () => {
 describe("数据源列表透出凭证配置状态 GET /api/v1/datasources", () => {
   beforeEach(() => {
     vi.mocked(prisma.dataSource.findMany).mockReset();
+  });
+
+  it("Google Ads 列表仅透出客户与经理 ID，未测试不宣称认证可用", async () => {
+    vi.mocked(prisma.dataSource.findMany).mockResolvedValue([{ ...apiListRecord("ads", "Ads", "adc"), config: googleAdsSourceConfig("1234567890", "9876543210") }] as never);
+    const json = await (await listGet(new Request("http://localhost/api/v1/datasources"))).json();
+    const item = json.data.dataSources.find((s: { id: string }) => s.id === "ads");
+    expect(item.meta).toEqual({ protocol: "google_ads", authType: "adc", authConfigured: null, customerId: "1234567890", loginCustomerId: "9876543210" });
+    expect(item.config).toBeUndefined();
+  });
+
+  it("GA4 列表只透出属性 ID，ADC 未测试时不宣称可用或缺失", async () => {
+    vi.mocked(prisma.dataSource.findMany).mockResolvedValue([
+      { ...apiListRecord("data_source_ga4", "GA4", "adc"), config: ga4SourceConfig("123") },
+    ] as never);
+    const json = await (await listGet(new Request("http://localhost/api/v1/datasources"))).json();
+    const source = json.data.dataSources.find((s: { id: string }) => s.id === "data_source_ga4");
+    expect(source.meta).toEqual({ protocol: "ga4", authType: "adc", authConfigured: null, propertyId: "123" });
+    expect(source.endpoint).toContain("properties/123");
+    expect(source.config).toBeUndefined();
   });
 
   it("meta.authConfigured 反映凭证是否已配置（脱敏布尔值，不回显凭证）", async () => {

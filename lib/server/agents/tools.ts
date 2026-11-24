@@ -3,6 +3,7 @@ import { z } from "zod";
 import { executeReadOnlyQuery, introspectSchema } from "@/lib/server/connectors/postgres";
 import { webSearch, fetchPage } from "@/lib/server/connectors/web";
 import { executeGraphQLQuery } from "@/lib/server/connectors/api";
+import { withDeadline, QueryTimeoutError, API_QUERY_TIMEOUT_MS } from "@/lib/server/connectors/deadline";
 import { cachedRestRequest } from "@/lib/server/connectors/api-cache";
 import { parseCsvTable, csvTableToObjects } from "@/lib/server/connectors/csv";
 import { runMcpReactAgent } from "@/lib/server/connectors/mcp";
@@ -15,6 +16,8 @@ import { env } from "@/lib/env";
 import { DEMO_SEMANTIC_MODELS, semanticContextSummary, type SemanticModelDef } from "@/lib/server/semantic/semantic-query";
 import type { AgentRunContext, ChartSpec, TablePayload } from "./events";
 import { nextStepId } from "./events";
+import { GA4_QUERY_GUIDE, GOOGLE_ADS_QUERY_GUIDE, API_FAILURE_CONTINUE_HINT, API_EMPTY_CONTINUE_HINT } from "./prompts";
+import { serializeGoogleAdsResult } from "@/lib/server/connectors/google-ads";
 
 /**
  * Agent 工具集（LangChain tools，供 LangGraph Agent 调用）
@@ -431,19 +434,113 @@ export function createRecordFindingTool(ctx: AgentRunContext) {
 
 /** 数据源清单描述（供工具 description / 提示词枚举） */
 export function externalSourcesSummary(sources: ResolvedDataSource[]): string {
-  return sources
+  const summary = sources
     .map((s) => {
+      if (s.type === "api" && s.apiConfig?.protocol === "google_ads") {
+        return `- ${s.name}（sourceId=${s.id}，API·Google Ads，${displayEndpoint(s)}，loginCustomerId=${s.apiConfig.loginCustomerId ?? "直接访问"}）`;
+      }
+      if (s.type === "api" && s.apiConfig?.protocol === "ga4") {
+        return `- ${s.name}（sourceId=${s.id}，API·GA4 官方 SDK，${displayEndpoint(s)}）`;
+      }
       if (s.type === "api") {
         return `- ${s.name}（sourceId=${s.id}，API·${s.apiConfig?.protocol === "graphql" ? "GraphQL" : "REST"}，${displayEndpoint(s)}）`;
       }
       return `- ${s.name}（sourceId=${s.id}，MCP 代理，${displayEndpoint(s)}）`;
     })
     .join("\n");
+  return [summary,
+    sources.some((s) => s.apiConfig?.protocol === "ga4") ? GA4_QUERY_GUIDE : "",
+    sources.some((s) => s.apiConfig?.protocol === "google_ads") ? GOOGLE_ADS_QUERY_GUIDE : "",
+  ].filter(Boolean).join("\n");
+}
+
+/** GA4 按完整行裁剪，保留合法 JSON、上游总行数与续页位置。 */
+export function serializeGa4ToolResult(result: { status: number; body: unknown; fromCache: boolean; cacheState: string; truncated: boolean }, source: ResolvedDataSource): string {
+  const body = { ...(result.body as Record<string, unknown>) };
+  const listKey = Array.isArray(body.rows) ? "rows" : Array.isArray(body.fields) ? "fields" : null;
+  const items = listKey ? [...body[listKey] as unknown[]] : [];
+  if (listKey) body[listKey] = items;
+  const payload: Record<string, unknown> = { ...body, sourceId: source.id, sourceName: source.name, status: result.status, fromCache: result.fromCache, cacheState: result.cacheState };
+  let text = JSON.stringify(payload);
+  while (text.length > 19_000 && items.length > 0) {
+    items.pop();
+    payload.truncated = true;
+    if (listKey === "rows") {
+      payload.returnedRows = items.length;
+      payload.nextOffset = items.length ? Number(body.offset ?? 0) + items.length : null;
+    }
+    text = JSON.stringify(payload);
+  }
+  return text.length <= 20_000 ? text : JSON.stringify({ sourceId: source.id, error: "GA4 结果元信息过大，请缩小查询范围", truncated: true });
+}
+
+/** 统一标识缺失/空数据，且独立保留有界证据，不依赖 worker 再次转述。 */
+function preserveApiResult(ctx: AgentRunContext, output: string, sourceId: string, sourceName?: string): string {
+  let payload: Record<string, unknown>;
+  try {
+    const parsed: unknown = JSON.parse(output);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("无效工具结果");
+    payload = parsed as Record<string, unknown>;
+  } catch {
+    payload = { error: "API 输出超过安全大小或格式无效，请缩小查询范围", truncated: true };
+  }
+  const body = payload.body && typeof payload.body === "object" ? payload.body as Record<string, unknown> : payload;
+  const graphqlErrors = Array.isArray(payload.errors) && payload.errors.length > 0;
+  const failed = !!payload.error || !!body.error || Number(payload.status) >= 400 || (graphqlErrors && payload.data == null);
+  const rows = Array.isArray(body.rows) ? body.rows : Array.isArray(body.fields) ? body.fields : Array.isArray(payload.body) ? payload.body : null;
+  const partial = !!payload.truncated || !!body.truncated || payload.cacheState === "stale" || graphqlErrors;
+  const empty = !partial && (rows?.length === 0 || body.rowCount === 0 || payload.status === 204 || payload.body === null || payload.data === null);
+  Object.assign(payload, {
+    sourceId, sourceName,
+    outcome: failed ? "unavailable" : partial ? "partial" : empty ? "empty" : "success",
+    ...(failed ? { nonFatal: true, hint: API_FAILURE_CONTINUE_HINT } : empty ? { hint: API_EMPTY_CONTINUE_HINT } : {}),
+  });
+  // API 直查结果同步注册为证据表格：结构化抽取以 dataFindings.tables 为唯一数值来源，
+  // 不注册则直查补齐的计划在 structured 行中整体缺失（实测 XC_iOS：Markdown 答案有数、抽取 0 行）。
+  // 只注册非失败的对象行；重复调用（命中缓存）同题同行不重复注册。
+  const recordRows = (rows ?? []).filter((r): r is Record<string, unknown> => !!r && typeof r === "object" && !Array.isArray(r));
+  if (!failed && recordRows.length > 0 && recordRows.length <= 200) {
+    const table: TablePayload = {
+      title: `API 直查 · ${sourceName ?? sourceId}`,
+      columns: [...new Set(recordRows.flatMap((r) => Object.keys(r)))],
+      rows: recordRows,
+      note: `${recordRows.length} 行${partial ? " · 结果被截断，仅含部分行" : ""}`,
+    };
+    const duplicated = ctx.dataFindings.tables.some((t) => t.title === table.title && JSON.stringify(t.rows) === JSON.stringify(table.rows));
+    if (!duplicated) {
+      ctx.dataFindings.tables.push(table);
+      ctx.sink({ type: "table", table });
+    }
+  }
+  const result = JSON.stringify(payload);
+  // 快照仅供综合兜底；保留完整行，不能把裁剪后的样本当作全量结果。
+  const snapshot = JSON.parse(result) as Record<string, unknown>;
+  const snapshotBody = snapshot.body && typeof snapshot.body === "object" ? snapshot.body as Record<string, unknown> : snapshot;
+  const items = Array.isArray(snapshotBody.rows) ? snapshotBody.rows : Array.isArray(snapshotBody.fields) ? snapshotBody.fields : Array.isArray(snapshot.body) ? snapshot.body : [];
+  while (JSON.stringify(snapshot).length > 6_000 && items.length) {
+    items.pop();
+    snapshot.snapshotTruncated = true;
+    snapshot.snapshotReturnedRows = items.length;
+    if (snapshot.outcome === "success") snapshot.outcome = "partial";
+    snapshot.snapshotNote = "仅保留部分完整行作为证据，不可据此计算完整总量";
+  }
+  let evidence = JSON.stringify(snapshot);
+  if (evidence.length > 6_000) {
+    evidence = JSON.stringify({
+      sourceId: sourceId.slice(0, 256), sourceName: sourceName?.slice(0, 300),
+      outcome: payload.outcome === "success" ? "partial" : payload.outcome,
+      status: payload.status, nonFatal: payload.nonFatal,
+      snapshotTruncated: true, note: "结果过大，仅保留查询状态；请缩小查询范围，不能据此推断指标值",
+    });
+  }
+  if (ctx.apiQueryResults.length < 6) ctx.apiQueryResults.push(evidence);
+  return result.length <= 20_000 ? result : evidence;
 }
 
 /** 调用已注册 API 数据源（REST/GraphQL，预算：单次任务最多 6 次） */
 export function createApiSourceTool(ctx: AgentRunContext, sources: ResolvedDataSource[]) {
   const apiSources = sources.filter((s) => s.type === "api" && s.apiConfig);
+  const terminalResults = new Map<string, string>();
   let calls = 0;
   return tool(
     async (input: {
@@ -457,91 +554,109 @@ export function createApiSourceTool(ctx: AgentRunContext, sources: ResolvedDataS
     }) => {
       const stepId = nextStepId(ctx);
       const startedAt = Date.now();
-      ctx.sink({ type: "tool_call", stepId, tool: "query_api_source", input: { sourceId: input.sourceId, path: input.path, graphqlQuery: input.graphqlQuery?.slice(0, 120) } });
-      if (calls >= 6) {
-        ctx.sink({ type: "tool_result", stepId, tool: "query_api_source", summary: "API 调用预算已用完（6 次）" });
-        return JSON.stringify({ error: "API 调用预算已用完（最多 6 次）", hint: "请基于已有数据继续分析或输出回答" });
-      }
       const source = apiSources.find((s) => s.id === input.sourceId);
-      if (!source?.apiConfig) {
-        ctx.sink({ type: "tool_result", stepId, tool: "query_api_source", summary: `数据源 ${input.sourceId} 不存在` });
-        return JSON.stringify({ error: `API 数据源 ${input.sourceId} 不存在`, available: apiSources.map((s) => s.id) });
+      const requestKey = JSON.stringify(input);
+      ctx.sink({ type: "tool_call", stepId, tool: "query_api_source", input: { sourceId: input.sourceId, path: input.path, method: input.method, body: input.body?.slice(0, 300), graphqlQuery: input.graphqlQuery?.slice(0, 120) } });
+      const previous = terminalResults.get(requestKey);
+      if (previous) {
+        ctx.sink({ type: "tool_result", stepId, tool: "query_api_source", summary: "该条件已确认失败或无数据，继续其他查询" });
+        return previous;
       }
-      calls += 1;
-      try {
-        if (source.apiConfig.protocol === "graphql") {
-          if (!input.graphqlQuery) {
-            return JSON.stringify({ error: "该数据源为 GraphQL 协议，必须提供 graphqlQuery 参数" });
+      const execute = async () => {
+        if (calls >= 6) {
+          ctx.sink({ type: "tool_result", stepId, tool: "query_api_source", summary: "API 调用预算已用完（6 次）" });
+          return JSON.stringify({ error: "API 调用预算已用完（最多 6 次）", hint: "请基于已有数据继续分析或输出回答" });
+        }
+        calls += 1;
+        if (!source?.apiConfig) {
+          ctx.sink({ type: "tool_result", stepId, tool: "query_api_source", summary: `数据源 ${input.sourceId} 不存在` });
+          return JSON.stringify({ error: `API 数据源 ${input.sourceId} 不存在`, available: apiSources.map((s) => s.id) });
+        }
+        try {
+          if (source.apiConfig.protocol === "graphql") {
+            if (!input.graphqlQuery) {
+              return JSON.stringify({ error: "该数据源为 GraphQL 协议，必须提供 graphqlQuery 参数" });
+            }
+            const result = await withDeadline(() => executeGraphQLQuery(source.apiConfig!, {
+              query: input.graphqlQuery!, variables: input.variables,
+            }), API_QUERY_TIMEOUT_MS);
+            ctx.sink({
+              type: "tool_result", stepId, tool: "query_api_source",
+              summary: `GraphQL 查询完成${result.errors?.length ? `（含 ${result.errors.length} 个错误）` : ""}`,
+              elapsedMs: Date.now() - startedAt,
+            });
+            return JSON.stringify({ data: result.data, errors: result.errors, truncated: result.truncated });
           }
-          const result = await executeGraphQLQuery(source.apiConfig, {
-            query: input.graphqlQuery,
-            variables: input.variables,
-          });
+          let parsedBody: unknown;
+          if (input.body) {
+            try {
+              parsedBody = JSON.parse(input.body);
+            } catch {
+              parsedBody = input.body;
+            }
+          }
+          const result = await cachedRestRequest(
+            source.apiConfig,
+            {
+              method: input.method ?? "GET",
+              path: input.path,
+              params: input.params,
+              body: parsedBody,
+            },
+            { sourceId: source.id },
+          );
           ctx.sink({
             type: "tool_result", stepId, tool: "query_api_source",
-            summary: `GraphQL 查询完成${result.errors?.length ? `（含 ${result.errors.length} 个错误）` : ""}`,
+            summary: result.fromCache
+              ? `命中缓存（${result.cacheState}）`
+              : `HTTP ${result.status}（${result.elapsedMs}ms）`,
             elapsedMs: Date.now() - startedAt,
           });
-          return JSON.stringify({ data: result.data, errors: result.errors }).slice(0, 20_000);
-        }
-        let parsedBody: unknown;
-        if (input.body) {
-          try {
-            parsedBody = JSON.parse(input.body);
-          } catch {
-            parsedBody = input.body;
+          if (source.apiConfig.protocol === "google_ads") return serializeGoogleAdsResult(result, source);
+          if (source.apiConfig.protocol === "ga4") return serializeGa4ToolResult(result, source);
+          // CSV 响应结构化为表格行（避免原文占满 20K 截断窗口）
+          if (result.contentType.includes("csv") && typeof result.body === "string") {
+            if (result.status === 204 || result.body.trim().length === 0) {
+              return JSON.stringify({ status: result.status, rowCount: 0, note: "区间无数据", fromCache: result.fromCache, cacheState: result.cacheState });
+            }
+            const table = parseCsvTable(result.body);
+            const rows = csvTableToObjects(table).slice(0, 200);
+            return JSON.stringify({
+              status: result.status,
+              columns: table.header,
+              rowCount: rows.length,
+              rows,
+              truncated: result.truncated || table.rows.length > 200,
+              note: table.rows.length > 200 ? `共 ${table.rows.length} 行，已截断至前 200 行` : "",
+              fromCache: result.fromCache,
+              cacheState: result.cacheState,
+            });
           }
+          return JSON.stringify({ status: result.status, body: result.body, truncated: result.truncated, fromCache: result.fromCache, cacheState: result.cacheState });
+        } catch (error) {
+          const google = source.apiConfig.protocol === "ga4" || source.apiConfig.protocol === "google_ads";
+          // Google 源保留具体错误（模板校验等参数级信息，不含凭证；上游错误已经 googleAdsError 脱敏、不会走到这里），
+          // 否则 Agent 看不到哪个参数错，无法自我纠正，一次校验失败即成死局
+          const detail = error instanceof Error ? error.message : String(error);
+          const msg = error instanceof QueryTimeoutError ? error.message : google ? `Google 查询失败：${detail.slice(0, 300)}。请核对操作参数；其他数据源可继续查询` : detail;
+          ctx.sink({ type: "tool_result", stepId, tool: "query_api_source", summary: `失败: ${msg}` });
+          return JSON.stringify({ error: msg, ...(error instanceof QueryTimeoutError ? { status: 504, code: error.code } : {}) });
         }
-        const result = await cachedRestRequest(
-          source.apiConfig,
-          {
-            method: input.method ?? "GET",
-            path: input.path,
-            params: input.params,
-            body: parsedBody,
-          },
-          { sourceId: source.id },
-        );
-        ctx.sink({
-          type: "tool_result", stepId, tool: "query_api_source",
-          summary: result.fromCache
-            ? `命中缓存（${result.cacheState}）`
-            : `HTTP ${result.status}（${result.elapsedMs}ms）`,
-          elapsedMs: Date.now() - startedAt,
-        });
-        // CSV 响应结构化为表格行（避免原文占满 20K 截断窗口）
-        if (result.contentType.includes("csv") && typeof result.body === "string") {
-          if (result.status === 204 || result.body.trim().length === 0) {
-            return JSON.stringify({ status: result.status, rowCount: 0, note: "区间无数据", fromCache: result.fromCache });
-          }
-          const table = parseCsvTable(result.body);
-          const rows = csvTableToObjects(table).slice(0, 200);
-          return JSON.stringify({
-            status: result.status,
-            columns: table.header,
-            rowCount: rows.length,
-            rows,
-            truncated: result.truncated || table.rows.length > 200,
-            note: table.rows.length > 200 ? `共 ${table.rows.length} 行，已截断至前 200 行` : "",
-            fromCache: result.fromCache,
-          }).slice(0, 20_000);
-        }
-        return JSON.stringify({ status: result.status, body: result.body, truncated: result.truncated, fromCache: result.fromCache }).slice(0, 20_000);
-      } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        ctx.sink({ type: "tool_result", stepId, tool: "query_api_source", summary: `失败: ${msg}` });
-        return JSON.stringify({ error: msg });
-      }
+      };
+      const result = preserveApiResult(ctx, await execute(), input.sourceId, source?.name);
+      const outcome = JSON.parse(result).outcome;
+      if (outcome === "empty" || outcome === "unavailable") terminalResults.set(requestKey, result);
+      return result;
     },
     {
       name: "query_api_source",
-      description: `调用已注册的外部 API 数据源获取数据（只读，经查询缓存与限流，命中缓存不消耗上游配额）。REST 源传 path/method/params/body，CSV 响应自动结构化为表格；GraphQL 源传 graphqlQuery/variables（禁止 mutation）。整个任务最多调用 6 次。注意：已建模的报告类指标/维度取数应优先用 run_operator（aggregate/filter 会依据指标所属数据源自动直连对应 API 源），本工具仅用于语义层未建模的自由 API 探索。可用数据源：\n${externalSourcesSummary(apiSources)}`,
+      description: `调用已注册的外部 API 数据源获取数据（只读，经查询缓存与限流，命中缓存不消耗上游配额）。REST 源传 path/method/params/body，CSV 响应自动结构化为表格；GraphQL 源传 graphqlQuery/variables（禁止 mutation）。整个任务最多调用 6 次。注意：已建模的报告类指标/维度取数应优先用 run_operator（aggregate/filter 会依据指标所属数据源自动直连对应 API 源），本工具用于 Google Ads campaign/投放报告、GA4 官方 SDK 报告及语义层未建模的自由 API 探索。可用数据源：\n${externalSourcesSummary(apiSources)}`,
       schema: z.object({
         sourceId: z.string().describe("数据源 ID（见工具描述中的可用数据源）"),
-        path: z.string().optional().describe("REST：拼接到 endpoint 之后的相对路径，如 csv_report（endpoint 已含基础路径时勿重复）"),
-        method: z.enum(["GET", "POST"]).optional().describe("REST：请求方法，默认 GET"),
-        params: z.record(z.string(), z.string()).optional().describe("REST：query 参数"),
-        body: z.string().optional().describe("REST POST：JSON 字符串请求体"),
+        path: z.string().optional().describe("REST：endpoint 之后的相对路径，如 csv_report（勿重复基础路径）；GA4 仅支持 runReport 或 metadata；Google Ads：accounts/account/clients/campaigns/conversionActions/report"),
+        method: z.enum(["GET", "POST"]).optional().describe("默认 GET；GA4 runReport 必须 POST，metadata 必须 GET；Google Ads 所有操作必须 POST"),
+        params: z.record(z.string(), z.string()).optional().describe("REST query 参数；GA4 metadata 仅接受 search"),
+        body: z.string().optional().describe("POST JSON 字符串请求体；GA4 限 20KB，用 dateRanges/dimensions/metrics，不传 property 或凭证；Google Ads 传客户ID、日期、campaignId、installAction 等模板参数，禁止自由 GAQL"),
         graphqlQuery: z.string().optional().describe("GraphQL：查询语句（仅 query）"),
         variables: z.record(z.string(), z.unknown()).optional().describe("GraphQL：变量"),
       }),

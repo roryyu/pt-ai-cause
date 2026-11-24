@@ -3,6 +3,8 @@ import { ApiError, handleApiError, ok, readJson, requireActor } from "@/lib/serv
 import { prisma } from "@/lib/db";
 import { DEMO_PG_ID, WEB_SOURCE_ID } from "@/lib/server/connectors/datasources";
 import { assertHttpUrl } from "@/lib/server/connectors/api";
+import { Ga4PropertyIdSchema, ga4SourceConfig } from "@/lib/server/connectors/google-analytics";
+import { GoogleAdsCustomerIdSchema, googleAdsSourceConfig } from "@/lib/server/connectors/google-ads";
 
 export const runtime = "nodejs";
 
@@ -10,6 +12,9 @@ export const runtime = "nodejs";
 const UpdateDataSourceSchema = z.object({
   name: z.string().min(1, "名称不能为空").max(100).optional(),
   // api 类型
+  propertyId: Ga4PropertyIdSchema.optional(),
+  customerId: z.union([GoogleAdsCustomerIdSchema, z.literal("")]).optional(),
+  loginCustomerId: z.union([GoogleAdsCustomerIdSchema, z.literal("")]).optional(),
   endpoint: z.string().url("endpoint 必须是合法 URL").optional(),
   protocol: z.enum(["rest", "graphql"]).optional(),
   authType: z.enum(["none", "bearer", "api_key", "basic"]).optional(),
@@ -54,7 +59,26 @@ export async function PUT(
     const config: Record<string, string | Record<string, string>> = {
       ...((record.config ?? {}) as Record<string, string | Record<string, string>>),
     };
-    if (record.type === "api") {
+    if (config.protocol !== "google_ads" && (input.customerId !== undefined || input.loginCustomerId !== undefined)) {
+      throw new ApiError(400, "INVALID_REQUEST", "Customer ID 仅适用于 Google Ads 数据源");
+    }
+    if (record.type === "api" && config.protocol === "google_ads") {
+      if ([input.endpoint, input.protocol, input.authType, input.authToken, input.apiKeyHeader, input.headers, input.propertyId].some((v) => v !== undefined)) {
+        throw new ApiError(400, "INVALID_REQUEST", "Google Ads 仅支持修改名称、客户 ID 和经理 ID，使用固定官方 endpoint 与服务端 ADC");
+      }
+      const next = googleAdsSourceConfig(
+        input.customerId ?? config.customerId as string | undefined,
+        input.loginCustomerId ?? config.loginCustomerId as string | undefined,
+      );
+      for (const key of Object.keys(config)) delete config[key];
+      Object.assign(config, next);
+    } else if (record.type === "api" && config.protocol === "ga4") {
+      if ([input.endpoint, input.protocol, input.authType, input.authToken, input.apiKeyHeader, input.headers].some((v) => v !== undefined)) {
+        throw new ApiError(400, "INVALID_REQUEST", "GA4 使用固定官方 endpoint 和服务端 ADC，仅支持修改名称与 Property ID");
+      }
+      Object.assign(config, ga4SourceConfig(Ga4PropertyIdSchema.parse(input.propertyId ?? config.propertyId)));
+    } else if (record.type === "api") {
+      if (input.propertyId !== undefined) throw new ApiError(400, "INVALID_REQUEST", "Property ID 仅适用于 GA4 数据源");
       if (input.endpoint !== undefined) {
         const urlCheck = assertHttpUrl(input.endpoint);
         if (!urlCheck.ok) throw new ApiError(400, "INVALID_REQUEST", `endpoint 非法：${urlCheck.reason}`);

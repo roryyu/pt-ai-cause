@@ -4,6 +4,8 @@ import { prisma } from "@/lib/db";
 import { newId } from "@/lib/server/ids";
 import { displayEndpoint, listDataSources } from "@/lib/server/connectors/datasources";
 import { assertHttpUrl } from "@/lib/server/connectors/api";
+import { Ga4PropertyIdSchema, ga4SourceConfig } from "@/lib/server/connectors/google-analytics";
+import { GoogleAdsCustomerIdSchema, googleAdsSourceConfig } from "@/lib/server/connectors/google-ads";
 
 export const runtime = "nodejs";
 
@@ -19,9 +21,12 @@ const CreateDataSourceSchema = z.discriminatedUnion("type", [
     type: z.literal("api"),
     name: z.string().min(1, "名称不能为空").max(100),
     /** REST base URL 或 GraphQL endpoint */
-    endpoint: z.string().url("endpoint 必须是合法 URL"),
-    protocol: z.enum(["rest", "graphql"]),
-    authType: z.enum(["none", "bearer", "api_key", "basic"]).default("none"),
+    endpoint: z.string().url("endpoint 必须是合法 URL").optional(),
+    protocol: z.enum(["rest", "graphql", "ga4", "google_ads"]),
+    customerId: GoogleAdsCustomerIdSchema.optional(),
+    loginCustomerId: GoogleAdsCustomerIdSchema.optional(),
+    propertyId: Ga4PropertyIdSchema.optional(),
+    authType: z.enum(["none", "bearer", "api_key", "basic", "adc"]).default("none"),
     authToken: z.string().max(2000).optional(),
     apiKeyHeader: z.string().max(100).optional(),
     headers: z.record(z.string(), z.string()).optional(),
@@ -65,8 +70,11 @@ export async function GET(request: Request) {
           ? {
               protocol: s.apiConfig.protocol,
               authType: s.apiConfig.authType,
-              authConfigured:
-                s.apiConfig.authType === "none" || Boolean(s.apiConfig.authToken),
+              ...(s.apiConfig.protocol === "ga4" ? { propertyId: s.apiConfig.propertyId } : {}),
+              ...(s.apiConfig.protocol === "google_ads" ? { customerId: s.apiConfig.customerId, loginCustomerId: s.apiConfig.loginCustomerId } : {}),
+              authConfigured: s.apiConfig.protocol === "ga4" || s.apiConfig.protocol === "google_ads"
+                ? null // ADC 可以来自工作负载身份；不能根据环境变量是否存在断言可用性。
+                : s.apiConfig.authType === "none" || Boolean(s.apiConfig.authToken),
             }
           : null,
       })),
@@ -98,7 +106,13 @@ export async function POST(request: Request) {
     let config: Record<string, string | Record<string, string>>;
     if (input.type === "bi") {
       config = { connectionUrl: input.connectionUrl };
+    } else if (input.type === "api" && input.protocol === "google_ads") {
+      config = googleAdsSourceConfig(input.customerId, input.loginCustomerId);
+    } else if (input.type === "api" && input.protocol === "ga4") {
+      config = ga4SourceConfig(Ga4PropertyIdSchema.parse(input.propertyId));
     } else if (input.type === "api") {
+      if (!input.endpoint) throw new ApiError(400, "INVALID_REQUEST", "api 类型数据源必须提供 endpoint");
+      if (input.authType === "adc") throw new ApiError(400, "INVALID_REQUEST", "ADC 仅适用于 Google 数据源");
       const urlCheck = assertHttpUrl(input.endpoint);
       if (!urlCheck.ok) throw new ApiError(400, "INVALID_REQUEST", `endpoint 非法：${urlCheck.reason}`);
       config = {
@@ -124,7 +138,7 @@ export async function POST(request: Request) {
         id,
         name: input.name,
         type: input.type,
-        connectorId: input.type === "bi" ? "postgres" : input.type,
+        connectorId: input.type === "bi" ? "postgres" : input.type === "api" && input.protocol === "google_ads" ? "google-ads" : input.type === "api" && input.protocol === "ga4" ? "google-analytics" : input.type,
         config,
       },
     });

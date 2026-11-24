@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { responseSchemaSpec } from "@/lib/server/agents/response-schema";
 
 /**
  * MCP 工具协议（纯 zod，无服务端依赖）：工具入参形状与返回 payload 类型。
@@ -12,6 +13,9 @@ export const askToolShape = {
   parentQuestionId: z.string().optional().describe("多轮追问：上一轮问答返回的 questionId，取其会话上下文"),
   dataSourceIds: z.array(z.string()).optional().describe("限定分析的数据源 ID；不传用全部已接入数据源"),
   workspaceId: z.string().optional().describe("工作区 ID（可选）"),
+  responseSchema: responseSchemaSpec
+    .optional()
+    .describe("结构化返回契约（可选，供定时同步等机器消费）：传入后从原始查询表格抽取符合字段规格的行数组，随结果 structured.rows 返回"),
 };
 
 /** 深度研究入参（口径同 POST /api/v1/research） */
@@ -46,6 +50,10 @@ export interface AskTaskResult {
   citations: McpCitation[];
   critique: { score: number; passed: boolean } | null;
   elapsedMs: number;
+  /** 传入 responseSchema 时的结构化行数据；未传或抽取失败为 null */
+  structured: { rows: Record<string, unknown>[] } | null;
+  /** 结构化抽取失败原因（仅传入 responseSchema 且失败时存在）；答案本身不受影响 */
+  structuredError?: string;
 }
 
 /** 深度研究返回：完整报告在 report；子问题明细与证据落库可回看 */
@@ -63,7 +71,8 @@ export interface ResearchTaskResult {
 export const ASK_TOOL_DESCRIPTION = [
   "（任务）Cause 归因平台的任务问答：对已接入的投放数据做自然语言分析（自动路由数据分析 / 研究 / 直接回答），同步返回最终答案。",
   "会在 Cause 系统创建问答记录（questionId 可用于追问或发起深度研究）。耗时通常 10 秒～2 分钟。",
-  "返回 JSON：questionId、route、answer（Markdown 全文）、chartCount、tableCount、citations、critique、elapsedMs。",
+  "可选 responseSchema（fields: name/type/required/description）：传入后额外返回 structured.rows（从原始查询表格抽取的扁平行数组，经严格校验）；抽取失败时 structured 为 null 并附 structuredError，答案不受影响。",
+  "返回 JSON：questionId、route、answer（Markdown 全文）、chartCount、tableCount、citations、critique、elapsedMs、structured。",
 ].join("\n");
 
 export const RESEARCH_TOOL_DESCRIPTION = [

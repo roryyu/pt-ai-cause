@@ -15,6 +15,7 @@ import {
   introspectGraphQLSchema,
 } from "@/lib/server/connectors/api";
 import { listMcpTools, callMcpTool, runMcpReactAgent } from "@/lib/server/connectors/mcp";
+import { cachedRestRequest } from "@/lib/server/connectors/api-cache";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -151,11 +152,13 @@ export async function POST(
 
     if (action === "request") {
       const config = requireApiConfig(source);
-      if (config.protocol !== "rest") {
+      if (config.protocol === "graphql") {
         throw new ApiError(400, "UNSUPPORTED", "GraphQL 数据源请使用 graphql 操作");
       }
       const input = RestRequestSchema.parse(await readJson<unknown>(request));
-      return ok(await runConnector(() => executeRestRequest(config, input)));
+      return ok(await runConnector(() => config.protocol === "ga4" || config.protocol === "google_ads"
+        ? cachedRestRequest(config, input, { sourceId: source.id })
+        : executeRestRequest(config, input)));
     }
 
     if (action === "graphql") {
@@ -203,6 +206,13 @@ export async function GET(
       // api·graphql 源：Schema 内省（Query 根字段）
       if (source.type === "api") {
         const config = requireApiConfig(source);
+        if (config.protocol === "ga4") {
+          const result = await runConnector(() => cachedRestRequest(config, {
+            method: "GET", path: "metadata", params: { search: url.searchParams.get("search") ?? "" },
+          }, { sourceId: source.id }));
+          if (result.status !== 200) throw new ApiError(400, "CONNECTOR_ERROR", (result.body as { error: string }).error);
+          return ok(result.body);
+        }
         if (config.protocol !== "graphql") {
           throw new ApiError(400, "UNSUPPORTED", "REST 数据源无 Schema 内省能力");
         }

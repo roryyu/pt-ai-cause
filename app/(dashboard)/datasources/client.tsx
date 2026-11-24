@@ -9,6 +9,7 @@ import {
 import { cn } from "@/lib/utils";
 import { apiFetch } from "@/lib/api-fetch";
 import { DataTable } from "@/components/data/DataTable";
+import { GoogleAdsPanel, GoogleAdsAuthHelp } from "./google-ads-panel";
 
 /**
  * 数据源管理（design.md 5.1 数据接入层管理台）
@@ -25,7 +26,7 @@ interface DataSourceItem {
   status: string;
   createdAt: string | null;
   endpoint: string;
-  meta: { protocol: "rest" | "graphql"; authType: string; authConfigured: boolean } | null;
+  meta: { protocol: "rest" | "graphql" | "ga4" | "google_ads"; authType: string; authConfigured: boolean | null; propertyId?: string; customerId?: string; loginCustomerId?: string } | null;
 }
 
 interface TableMetaItem {
@@ -52,6 +53,7 @@ export function DataSourcesClient() {
   // 测试状态
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
+  const [testSourceKey, setTestSourceKey] = useState("");
 
   // Schema 浏览
   const [tables, setTables] = useState<TableMetaItem[]>([]);
@@ -68,6 +70,7 @@ export function DataSourcesClient() {
 
   const selected = sources.find((s) => s.id === selectedId) ?? null;
   const isPg = selected?.type === "bi";
+  const selectedSourceKey = `${selectedId}:${selected?.meta?.propertyId ?? ""}:${selected?.meta?.customerId ?? ""}:${selected?.meta?.loginCustomerId ?? ""}`;
 
   const loadSources = useCallback(async () => {
     try {
@@ -90,6 +93,7 @@ export function DataSourcesClient() {
     if (!selectedId || testing) return;
     setTesting(true);
     setTestResult(null);
+    setTestSourceKey(selectedSourceKey);
     try {
       const json = await apiFetch(`/api/v1/datasources/${selectedId}/test`, { method: "POST" });
       if (json.ok) {
@@ -101,6 +105,10 @@ export function DataSourcesClient() {
           text = `连接正常 · 搜索可用（返回 ${d.sampleCount} 条样本）`;
         } else if (d.kind === "mcp") {
           text = `连接正常 · MCP 代理可用 · 发现 ${d.toolCount} 个工具`;
+        } else if (d.kind === "google_ads") {
+          text = `连接正常 · Google Ads 只读检查通过 · 延迟 ${d.latencyMs}ms`;
+        } else if (d.kind === "ga4") {
+          text = `连接正常 · GA4 官方 SDK 报告读取成功 · 延迟 ${d.latencyMs}ms`;
         } else if (d.kind === "rest" || d.kind === "graphql") {
           // 401/403：endpoint 可达但认证被拒（如 token 缺失/失效），不再误报为“连接正常”
           const authRejected = d.statusCode === 401 || d.statusCode === 403;
@@ -120,7 +128,7 @@ export function DataSourcesClient() {
     } finally {
       setTesting(false);
     }
-  }, [selectedId, testing]);
+  }, [selectedId, selectedSourceKey, testing]);
 
   /** 切换到 PostgreSQL 数据源时自动加载 Schema（setState 均在异步回调中，避免 effect 内同步更新） */
   useEffect(() => {
@@ -279,10 +287,10 @@ export function DataSourcesClient() {
                     style={{ color: s.status === "active" ? "var(--success)" : "var(--danger)" }}
                   >
                     <CheckCircle2 size={11} />
-                    {s.status === "active" ? "可用" : "配置缺失"}
+                    {s.status === "active" ? (s.meta?.protocol === "ga4" || s.meta?.protocol === "google_ads" ? "已注册" : "可用") : "配置缺失"}
                   </span>
                   {/* api 源凭证未配置时透出警告（调用受保护接口将 401） */}
-                  {!s.builtin && s.type === "api" && s.meta && !s.meta.authConfigured && (
+                  {!s.builtin && s.type === "api" && s.meta && s.meta.authConfigured === false && (
                     <span className="text-xs font-medium" style={{ color: "var(--warning)" }}>
                       认证未配置
                     </span>
@@ -315,7 +323,7 @@ export function DataSourcesClient() {
                 {testing ? "测试中..." : "测试连接"}
               </button>
             </div>
-            {testResult && (
+            {testResult && testSourceKey === selectedSourceKey && (
               <p
                 className="mt-3 flex items-start gap-1.5 whitespace-pre-line rounded-[8px] px-3 py-2 text-xs"
                 style={{
@@ -471,7 +479,15 @@ export function DataSourcesClient() {
             </>
           )}
 
-          {selected?.type === "api" && (
+          {selected?.type === "api" && selected.meta?.protocol === "ga4" && (
+            <Ga4SourcePanel key={`ga4-${selected.id}-${selected.meta.propertyId}`} source={selected} onSaved={loadSources} />
+          )}
+
+          {selected?.type === "api" && selected.meta?.protocol === "google_ads" && (
+            <GoogleAdsPanel key={selectedSourceKey} source={selected} onSaved={loadSources} />
+          )}
+
+          {selected?.type === "api" && selected.meta?.protocol !== "ga4" && selected.meta?.protocol !== "google_ads" && (
             <>
               {/* key 前缀区分面板：兄弟节点 key 必须唯一，仅用于切换数据源时重置内部状态 */}
               <ApiAuthPanel key={`auth-${selected.id}`} source={selected} onSaved={loadSources} />
@@ -511,6 +527,8 @@ function SourceIcon({ type }: { type: string }) {
 /** 数据源类型标签 */
 function sourceTypeLabel(s: DataSourceItem): string {
   if (s.type === "web") return "Web 检索";
+  if (s.type === "api" && s.meta?.protocol === "google_ads") return "API · Google Ads";
+  if (s.type === "api" && s.meta?.protocol === "ga4") return "API · GA4";
   if (s.type === "api") return s.meta?.protocol === "graphql" ? "API · GraphQL" : "API · REST";
   if (s.type === "mcp") return "MCP 代理";
   return "PostgreSQL";
@@ -554,7 +572,8 @@ function CreateSourceForm({ onCreated }: { onCreated: () => void }) {
   const [url, setUrl] = useState("");
   // api
   const [endpoint, setEndpoint] = useState("");
-  const [protocol, setProtocol] = useState<"rest" | "graphql">("rest");
+  const [protocol, setProtocol] = useState<"rest" | "graphql" | "ga4" | "google_ads">("rest");
+  const [propertyId, setPropertyId] = useState("");
   const [authType, setAuthType] = useState<"none" | "bearer" | "api_key" | "basic">("none");
   const [authToken, setAuthToken] = useState("");
   const [apiKeyHeader, setApiKeyHeader] = useState("");
@@ -578,6 +597,14 @@ function CreateSourceForm({ onCreated }: { onCreated: () => void }) {
         return;
       }
       payload = { type, name: name.trim(), connectionUrl: url.trim() };
+    } else if (type === "api" && protocol === "google_ads") {
+      payload = { type, name: name.trim(), protocol };
+    } else if (type === "api" && protocol === "ga4") {
+      if (!/^[1-9]\d{0,19}$/.test(propertyId.trim())) {
+        setError("请输入 GA4 数字 Property ID，不是 G- 开头的 Measurement ID");
+        return;
+      }
+      payload = { type, name: name.trim(), protocol, propertyId: propertyId.trim() };
     } else if (type === "api") {
       if (!endpoint.trim()) {
         setError("endpoint 不能为空");
@@ -614,11 +641,11 @@ function CreateSourceForm({ onCreated }: { onCreated: () => void }) {
     } finally {
       setSubmitting(false);
     }
-  }, [type, name, url, endpoint, protocol, authType, authToken, apiKeyHeader, proxyUrl, headersText, onCreated]);
+  }, [type, name, url, endpoint, protocol, propertyId, authType, authToken, apiKeyHeader, proxyUrl, headersText, onCreated]);
 
   const typeOptions = [
     { value: "bi" as const, label: "PostgreSQL", desc: "只读分析库" },
-    { value: "api" as const, label: "API 接口", desc: "REST / GraphQL" },
+    { value: "api" as const, label: "API 接口", desc: "REST / GraphQL / GA4 / Google Ads" },
     { value: "mcp" as const, label: "MCP 代理", desc: "第三方 MCP 服务" },
   ];
 
@@ -678,51 +705,66 @@ function CreateSourceForm({ onCreated }: { onCreated: () => void }) {
 
         {type === "api" && (
           <>
-            <input
-              value={endpoint}
-              onChange={(e) => setEndpoint(e.target.value)}
-              placeholder="https://open.example.com/api 或 GraphQL endpoint"
-              className={monoInputCls}
-              style={inputStyle}
-            />
             <select
               value={protocol}
-              onChange={(e) => setProtocol(e.target.value as "rest" | "graphql")}
+              onChange={(e) => setProtocol(e.target.value as typeof protocol)}
+              aria-label="API 协议"
               className={inputCls}
               style={inputStyle}
             >
               <option value="rest">REST</option>
               <option value="graphql">GraphQL</option>
+              <option value="ga4">Google Analytics 4（官方 SDK）</option>
+              <option value="google_ads">Google Ads（campaign 与投放指标）</option>
             </select>
-            <select
-              value={authType}
-              onChange={(e) => setAuthType(e.target.value as typeof authType)}
-              className={inputCls}
-              style={inputStyle}
-            >
-              <option value="none">无需认证</option>
-              <option value="bearer">Bearer Token</option>
-              <option value="api_key">API Key（Header）</option>
-              <option value="basic">Basic Auth</option>
-            </select>
-            {authType !== "none" && (
-              <input
-                value={authToken}
-                onChange={(e) => setAuthToken(e.target.value)}
-                type="password"
-                placeholder={authType === "basic" ? "base64(user:pass)" : "凭证值（仅存服务端，不回显）"}
-                className={monoInputCls}
-                style={inputStyle}
-              />
-            )}
-            {authType === "api_key" && (
-              <input
-                value={apiKeyHeader}
-                onChange={(e) => setApiKeyHeader(e.target.value)}
-                placeholder="Header 名（默认 X-API-Key）"
-                className={monoInputCls}
-                style={inputStyle}
-              />
+            {protocol === "google_ads" ? (
+              <div className="col-span-2"><GoogleAdsAuthHelp /></div>
+            ) : protocol === "ga4" ? (
+              <label className="col-span-2 space-y-2 text-xs" style={{ color: "var(--muted)" }}>
+                <span>GA4 Property ID（管理 → 属性详情中的数字 ID）</span>
+                <input value={propertyId} onChange={(e) => setPropertyId(e.target.value)} inputMode="numeric" placeholder="例如 123456789（不是 G- 开头的 ID）" className={cn(monoInputCls, "w-full")} style={inputStyle} />
+                <Ga4AuthHelp />
+              </label>
+            ) : (
+              <>
+                <input
+                  value={endpoint}
+                  onChange={(e) => setEndpoint(e.target.value)}
+                  placeholder="https://open.example.com/api 或 GraphQL endpoint"
+                  className={monoInputCls}
+                  style={inputStyle}
+                />
+                <select
+                  value={authType}
+                  onChange={(e) => setAuthType(e.target.value as typeof authType)}
+                  className={inputCls}
+                  style={inputStyle}
+                >
+                  <option value="none">无需认证</option>
+                  <option value="bearer">Bearer Token</option>
+                  <option value="api_key">API Key（Header）</option>
+                  <option value="basic">Basic Auth</option>
+                </select>
+                {authType !== "none" && (
+                  <input
+                    value={authToken}
+                    onChange={(e) => setAuthToken(e.target.value)}
+                    type="password"
+                    placeholder={authType === "basic" ? "base64(user:pass)" : "凭证值（仅存服务端，不回显）"}
+                    className={monoInputCls}
+                    style={inputStyle}
+                  />
+                )}
+                {authType === "api_key" && (
+                  <input
+                    value={apiKeyHeader}
+                    onChange={(e) => setApiKeyHeader(e.target.value)}
+                    placeholder="Header 名（默认 X-API-Key）"
+                    className={monoInputCls}
+                    style={inputStyle}
+                  />
+                )}
+              </>
             )}
           </>
         )}
@@ -738,7 +780,7 @@ function CreateSourceForm({ onCreated }: { onCreated: () => void }) {
         )}
       </div>
 
-      {(type === "api" || type === "mcp") && (
+      {((type === "api" && protocol !== "ga4" && protocol !== "google_ads") || type === "mcp") && (
         <textarea
           value={headersText}
           onChange={(e) => setHeadersText(e.target.value)}
@@ -774,7 +816,7 @@ function CreateSourceForm({ onCreated }: { onCreated: () => void }) {
       <p className="mt-2 flex items-center gap-1 text-xs" style={{ color: "var(--muted)" }}>
         <Shield size={11} />
         {type === "bi" && "仅支持只读访问：所有查询经 SELECT-ONLY 校验 + READ ONLY 事务 + 超时与行数硬限制"}
-        {type === "api" && "只读原则：REST 仅允许 GET/POST，GraphQL 禁止 mutation/subscription；凭证仅存服务端不回显"}
+        {type === "api" && (protocol === "google_ads" ? "只读账户、campaign 与投放报告；不允许修改预算或广告状态" : protocol === "ga4" ? "只读 GA4 报告与指标目录；凭证由服务端 ADC 管理，注册后请测试连接" : "只读原则：REST 仅允许 GET/POST，GraphQL 禁止 mutation/subscription；凭证仅存服务端不回显")}
         {type === "mcp" && "经内部 MCP 代理访问第三方 MCP 服务（streamable HTTP，自动回退 SSE），每次调用独立建连"}
       </p>
     </section>
@@ -782,6 +824,176 @@ function CreateSourceForm({ onCreated }: { onCreated: () => void }) {
 }
 
 // ─── API 数据源认证配置 ─────────────────────────────────────────────────────
+
+/** 浏览器仅保存属性 ID，不接触 Google 私钥。 */
+function Ga4AuthHelp() {
+  return (
+    <span className="block text-xs leading-relaxed" style={{ color: "var(--muted)" }}>
+      服务端使用 Google ADC：可设置 GOOGLE_APPLICATION_CREDENTIALS 指向凭证文件，或使用工作负载身份。
+      请启用 Google Analytics Data API，并在该 GA4 属性的访问管理中授予服务账号查看者（Viewer）或更高权限。
+      不在此页面上传私钥；注册不代表认证成功，请点击上方「测试连接」。
+    </span>
+  );
+}
+
+const GA4_EXAMPLE = JSON.stringify({
+  dateRanges: [{ startDate: "7daysAgo", endDate: "yesterday" }],
+  dimensions: [{ name: "sessionSourceMedium" }],
+  metrics: [{ name: "sessions" }, { name: "activeUsers" }],
+  limit: 100,
+}, null, 2);
+
+interface Ga4ReportResult {
+  columns: string[];
+  rows: Record<string, unknown>[];
+  rowCount: number;
+  returnedRows: number;
+  offset: number;
+  nextOffset: number | null;
+  truncated: boolean;
+  notes: string[];
+  metadata: unknown;
+  propertyQuota: unknown;
+  property: string;
+  dateRanges: unknown;
+}
+
+/** GA4 专用控制台，查询在服务端经官方 SDK 执行。 */
+function Ga4SourcePanel({ source, onSaved }: { source: DataSourceItem; onSaved: () => void }) {
+  const [propertyId, setPropertyId] = useState(source.meta?.propertyId ?? "");
+  const [saving, setSaving] = useState(false);
+  const [configError, setConfigError] = useState("");
+  const [bodyText, setBodyText] = useState(GA4_EXAMPLE);
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState("");
+  const [result, setResult] = useState<Ga4ReportResult | null>(null);
+  const [resultMeta, setResultMeta] = useState("");
+  const [lastRequest, setLastRequest] = useState<Record<string, unknown> | null>(null);
+  const [search, setSearch] = useState("");
+  const [loadingFields, setLoadingFields] = useState(false);
+  const [fields, setFields] = useState<unknown>(null);
+
+  async function saveProperty() {
+    if (saving) return;
+    if (!/^[1-9]\d{0,19}$/.test(propertyId.trim())) {
+      setConfigError("请输入有效的 GA4 数字 Property ID");
+      return;
+    }
+    setSaving(true);
+    setConfigError("");
+    try {
+      const json = await apiFetch(`/api/v1/datasources/${source.id}`, {
+        method: "PUT", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ propertyId: propertyId.trim() }),
+      });
+      if (!json.ok) throw new Error(json.error?.message ?? "保存失败");
+      onSaved();
+    } catch (err) {
+      setConfigError(err instanceof Error ? err.message : "网络异常");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function run(nextPage = false) {
+    if (running) return;
+    setRunning(true);
+    setError("");
+    setResult(null);
+    setResultMeta("");
+    try {
+      if (nextPage && (!lastRequest || result?.nextOffset == null)) return;
+      const body: Record<string, unknown> = nextPage
+        ? { ...lastRequest, offset: result!.nextOffset }
+        : JSON.parse(bodyText);
+      const json = await apiFetch(`/api/v1/datasources/${source.id}/request`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ method: "POST", path: "runReport", body }),
+      });
+      if (!json.ok) throw new Error(json.error?.message ?? "查询失败");
+      const data = json.data;
+      if (data.status !== 200) throw new Error(data.body?.error ?? `GA4 返回 HTTP ${data.status}`);
+      setResult(data.body);
+      setLastRequest(body);
+      setBodyText(JSON.stringify(body, null, 2));
+      setResultMeta(`${data.elapsedMs}ms · ${data.cacheState === "stale" ? "上游暂不可用，使用过期缓存" : data.fromCache ? "命中缓存" : "实时请求"}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "网络异常");
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  async function loadFields() {
+    if (loadingFields) return;
+    setLoadingFields(true);
+    setError("");
+    setFields(null);
+    try {
+      const json = await apiFetch(`/api/v1/datasources/${source.id}/schema?search=${encodeURIComponent(search.trim())}`);
+      if (!json.ok) throw new Error(json.error?.message ?? "字段目录读取失败");
+      setFields(json.data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "网络异常");
+    } finally {
+      setLoadingFields(false);
+    }
+  }
+
+  const propertyChanged = propertyId.trim() !== source.meta?.propertyId;
+  return (
+    <section className="space-y-4 rounded-[var(--radius-sm)] border p-5" style={{ borderColor: "var(--line)", background: "var(--surface)" }}>
+      <h2 className="flex items-center gap-2 text-sm font-bold" style={{ color: "var(--ink)" }}>
+        <Webhook size={15} style={{ color: "var(--purple)" }} /> Google Analytics 4 · 官方 SDK
+      </h2>
+      <Ga4AuthHelp />
+      <div className="flex items-end gap-2">
+        <label className="flex-1 space-y-1 text-xs" style={{ color: "var(--muted)" }}>
+          <span>Property ID（当前查询属性：{source.meta?.propertyId}）</span>
+          <input value={propertyId} onChange={(e) => setPropertyId(e.target.value)} inputMode="numeric" className={cn(monoInputCls, "w-full")} style={inputStyle} />
+        </label>
+        <button onClick={saveProperty} disabled={saving || !propertyChanged} className={cn(inputCls, "text-xs disabled:opacity-50")} style={inputStyle}>
+          {saving ? "保存中…" : "保存属性"}
+        </button>
+      </div>
+      {configError && <p className="text-xs" style={{ color: "var(--danger)" }}>{configError}</p>}
+      {propertyChanged && <p className="text-xs" style={{ color: "var(--warning)" }}>属性 ID 尚未保存，保存后再查询。</p>}
+      <div className="flex gap-2">
+        <input aria-label="搜索 GA4 指标与维度" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="字段关键词，例如 revenue / event / session" maxLength={100} className={cn(monoInputCls, "min-w-0 flex-1")} style={inputStyle} />
+        <button onClick={loadFields} disabled={loadingFields || saving || propertyChanged} className={cn(inputCls, "text-xs disabled:opacity-50")} style={inputStyle}>
+          {loadingFields ? "读取中…" : "查询字段目录"}
+        </button>
+      </div>
+      {fields !== null && <JsonView value={fields} />}
+      <label className="block space-y-2 text-xs" style={{ color: "var(--muted)" }}>
+        <span>runReport 请求 JSON · 最多 1000 行/页 · 不传 property 或凭证</span>
+        <textarea value={bodyText} onChange={(e) => setBodyText(e.target.value)} rows={13} maxLength={20_000} spellCheck={false} className={cn(monoInputCls, "w-full resize-y")} style={inputStyle} />
+      </label>
+      <div className="flex gap-2">
+        <button onClick={() => run()} disabled={running || saving || propertyChanged || !bodyText.trim()} className={cn(inputCls, "text-xs disabled:opacity-50")} style={{ ...inputStyle, color: "var(--purple)" }}>
+          {running ? "查询中…" : "执行 GA4 报告"}
+        </button>
+        <button onClick={() => setBodyText(GA4_EXAMPLE)} disabled={running} className={cn(inputCls, "text-xs disabled:opacity-50")} style={inputStyle}>恢复示例</button>
+      </div>
+      <p className="text-xs" style={{ color: "var(--muted)" }}>查询结果不会写入 Adjust 明细库；活跃用户数、总用户数与比率不能跨行相加。需要总量时，去掉 dimensions 重新查询。</p>
+      {error && <p className="text-xs" role="alert" style={{ color: "var(--danger)" }}>{error}</p>}
+      {result && (
+        <div className="space-y-3">
+          <p className="text-xs" style={{ color: "var(--muted)" }}>{resultMeta} · 共 {result.rowCount} 行，本页返回 {result.returnedRows} 行（offset={result.offset}）{result.truncated ? " · 仅部分结果" : ""}</p>
+          <DataTable title={`GA4 · ${source.name}`} columns={result.columns} rows={result.rows} defaultOpen maxHeight={360} />
+          {result.nextOffset !== null && (
+            <button onClick={() => run(true)} disabled={running || saving || propertyChanged} className={cn(inputCls, "text-xs disabled:opacity-50")} style={inputStyle}>查询下一页（offset={result.nextOffset}，沿用上次条件）</button>
+          )}
+          <ul className="list-disc space-y-1 pl-4 text-xs" style={{ color: "var(--muted)" }}>{result.notes.map((note) => <li key={note}>{note}</li>)}</ul>
+          <details className="text-xs" style={{ color: "var(--muted)" }}>
+            <summary className="cursor-pointer">属性、日期、时区、币种、数据质量与配额</summary>
+            <JsonView value={{ property: result.property, dateRanges: result.dateRanges, metadata: result.metadata, propertyQuota: result.propertyQuota }} />
+          </details>
+        </div>
+      )}
+    </section>
+  );
+}
 
 const AUTH_TYPE_LABELS: Record<string, string> = {
   none: "无需认证",

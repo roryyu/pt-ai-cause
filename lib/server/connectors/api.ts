@@ -13,12 +13,19 @@
  * - 凭证（authToken/headers）仅在服务端使用，接口层不回显
  */
 
+import { executeGa4Request } from "./google-analytics";
+import { executeGoogleAdsRequest } from "./google-ads";
+
 /** API 数据源配置（存于 data_sources.config） */
 export interface ApiSourceConfig {
   /** REST base URL 或 GraphQL endpoint */
   endpoint: string;
-  protocol: "rest" | "graphql";
-  authType: "none" | "bearer" | "api_key" | "basic";
+  protocol: "rest" | "graphql" | "ga4" | "google_ads";
+  customerId?: string;
+  loginCustomerId?: string;
+  authType: "none" | "bearer" | "api_key" | "basic" | "adc";
+  /** GA4 数字属性 ID；认证由服务端 ADC 提供 */
+  propertyId?: string;
   /** bearer/basic 凭证或 api key 值 */
   authToken?: string;
   /** api_key 时的 header 名，默认 X-API-Key */
@@ -81,7 +88,7 @@ async function fetchWithLimits(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
-    const response = await fetch(url, { ...init, signal: controller.signal });
+    const response = await fetch(url, { ...init, signal: init.signal ? AbortSignal.any([controller.signal, init.signal]) : controller.signal });
     // 本函数刻意返回所有响应（含 4xx/5xx），由调用方按 status 决策：
     // testApiSource 用 status<400/<500 判定可达并生成诊断，fetchWithRetry 用 429/503 触发指数退避。
     // 故此处不抛错，仅先取状态供限流退避判定，再读取响应体。
@@ -105,7 +112,7 @@ async function fetchWithLimits(
 
 export interface ApiTestResult {
   ok: boolean;
-  kind: "rest" | "graphql";
+  kind: "rest" | "graphql" | "ga4" | "google_ads";
   latencyMs: number;
   statusCode?: number;
   error?: string;
@@ -129,6 +136,32 @@ function restTestHint(status: number): string | undefined {
 
 /** 连通性测试：GraphQL 发 __typename 探测；REST 发 GET（status < 500 即视为可达） */
 export async function testApiSource(config: ApiSourceConfig): Promise<ApiTestResult> {
+  if (config.protocol === "google_ads") {
+    try {
+      const result = await executeGoogleAdsRequest(config, { method: "POST", path: config.customerId ? "campaigns" : "accounts", body: { limit: 1 } });
+      const body = result.body as { error?: string; warning?: string; help?: Array<{ label: string; url: string }> };
+      return { ok: result.status === 200 && !body.warning, kind: "google_ads", latencyMs: result.elapsedMs, statusCode: result.status,
+        error: body.error ?? body.warning,
+        hint: body.help?.map((h) => `${h.label}：${h.url}`).join("\n") ?? (config.customerId ? "campaign 列表读取成功；具体指标请按日期查询。" : "账户发现成功；请先选择账户，再验证 campaign 和指标权限。") };
+    } catch {
+      return { ok: false, kind: "google_ads", latencyMs: 0, error: "Google Ads 配置无效，请核对客户/经理 ID 与服务端 ADC" };
+    }
+  }
+  if (config.protocol === "ga4") {
+    const start = Date.now();
+    try {
+      const result = await executeGa4Request(config, {
+        method: "POST", path: "runReport",
+        body: { dateRanges: [{ startDate: "yesterday", endDate: "yesterday" }], metrics: [{ name: "activeUsers" }], limit: 1 },
+      });
+      return {
+        ok: result.status === 200, kind: "ga4", latencyMs: Date.now() - start, statusCode: result.status,
+        ...(result.status !== 200 ? { error: (result.body as { error: string }).error } : {}),
+      };
+    } catch {
+      return { ok: false, kind: "ga4", latencyMs: Date.now() - start, error: "GA4 配置无效，请核对数字 Property ID" };
+    }
+  }
   const check = assertHttpUrl(config.endpoint);
   const start = Date.now();
   if (!check.ok) {
@@ -198,6 +231,8 @@ export interface ApiCallResult {
   truncated: boolean;
   /** 429/503 时上游 Retry-After 头部解析结果（毫秒），供退避重试 */
   retryAfterMs?: number;
+  /** 完整操作已超时等情况不再消耗重试预算。 */
+  retryable?: boolean;
 }
 
 /**
@@ -242,8 +277,11 @@ export function parseBody(raw: string, contentType: string): unknown {
 export async function executeRestRequest(
   config: ApiSourceConfig,
   input: RestRequestInput,
-  opts?: { maxBodyBytes?: number },
+  opts?: { maxBodyBytes?: number; signal?: AbortSignal },
 ): Promise<ApiCallResult> {
+  opts?.signal?.throwIfAborted();
+  if (config.protocol === "google_ads") return executeGoogleAdsRequest(config, input, opts?.signal);
+  if (config.protocol === "ga4") return executeGa4Request(config, input, opts?.maxBodyBytes, opts?.signal);
   const check = assertHttpUrl(config.endpoint);
   if (!check.ok) throw new Error(check.reason);
   if (input.method !== "GET" && input.method !== "POST") {
@@ -259,6 +297,7 @@ export async function executeRestRequest(
       ...buildAuthHeaders(config),
     },
     body: input.method === "POST" && input.body !== undefined ? JSON.stringify(input.body) : undefined,
+    signal: opts?.signal,
   }, opts?.maxBodyBytes);
   return {
     status: result.status,
@@ -303,6 +342,8 @@ export async function executeGraphQLQuery(
   config: ApiSourceConfig,
   input: { query: string; variables?: Record<string, unknown> },
 ): Promise<GraphQLResult> {
+  if (config.protocol === "google_ads") throw new Error("Google Ads 不支持 GraphQL，请使用只读操作模板");
+  if (config.protocol === "ga4") throw new Error("GA4 不支持 GraphQL，请使用 runReport");
   const urlCheck = assertHttpUrl(config.endpoint);
   if (!urlCheck.ok) throw new Error(urlCheck.reason);
   const readonlyCheck = assertReadOnlyGraphQL(input.query);

@@ -40,6 +40,9 @@ export const ROUTING_PROMPT = `你是流量投放归因平台的任务路由器�
 - "对比 Meta/X/TikTok 今年以来的花费、下载、FD、RD 与 ROI，哪个性价比最高？" → {"route": "data_analysis"}
 - "X 渠道最近 FD 率为什么持续下降？按月份和市场下钻" → {"route": "data_analysis"}
 - "app 和 web 两个承接端的转化有什么差异？" → {"route": "data_analysis"}
+- "查完 Adjust 再查 Google Analytics / GA4，对比昨天各渠道的会话和转化" → {"route": "data_analysis"}
+- "查询 GA4 的活跃用户、页面浏览量、事件与来源媒介" → {"route": "data_analysis"}
+- "列出 Google Ads campaign、启用/暂停状态，查询点击率、下载/安装和安装成本" → {"route": "data_analysis"}
 - "2026 年 TikTok 广告竞价成本上涨的原因及应对策略？" → {"route": "research"}
 - "海外应用投放市场的主要玩家和竞争格局？" → {"route": "research"}
 - "什么是 ROAS？怎么计算？" → {"route": "direct"}
@@ -61,6 +64,9 @@ export const CRITIC_PROMPT = `你是研究质量评审（Critic）。基于以�
 - 具体性：发现是否含具体数据/事实而非泛泛而谈（权重 30%）
 passed = score >= 6。issues 为空数组表示通过。`;
 
+export const API_FAILURE_CONTINUE_HINT = "本数据源本次不可用，不影响其他查询。不要重复相同失败请求；使用其他已取得的数据继续回答，明确缺失来源和原因，禁止以零值或其他来源冒充。";
+export const API_EMPTY_CONTINUE_HINT = "该查询正常返回但没有匹配行，不等于指标为零或资源一定不存在。不要重复相同条件；继续其他数据源并在结论中说明该来源/区间无数据。";
+
 /** Synthesizer 综合结论（汇聚数据发现 + 研究证据） */
 export const SYNTHESIZER_PROMPT = `你是流量投放归因平台的首席分析师（Synthesizer）。下属 Agent 已完成工作，请基于其产出撰写面向业务用户的最终回答。
 
@@ -71,7 +77,33 @@ export const SYNTHESIZER_PROMPT = `你是流量投放归因平台的首席分析
 4. **归因与建议**：数据类问题给出归因分析与行动建议（如预算调整、渠道/市场取舍）；研究类问题注明证据强度
 5. **引用标注**：研究结论后标注来源编号如 [1][2]
 6. **诚实边界**：证据不足处明确说明（"基于现有数据/信源..."）
-7. 中文回答，长度与问题复杂度匹配（简单问题简洁，复杂问题可展开）`;
+7. 中文回答，长度与问题复杂度匹配（简单问题简洁，复杂问题可展开）
+8. 部分数据源失败、超时或无数据不等于整个任务失败。按 API 查询证据中的 sourceId/sourceName 和 outcome 区分 success/partial/empty/unavailable，保留已成功来源的数据；明确失败或空数据范围，不补零、不猜测缺失数据。snapshotTruncated/truncated 表示样本或分页不完整，不得据此推算完整总量。所有来源均不可用时说明限制与下一步，不编造分析结论。`;
+
+/** GA4 通过现有 API 工具调用官方 SDK，不套用 Adjust 的参数与明细求和模型。 */
+export const GA4_QUERY_GUIDE = `Google Analytics 4 通过 query_api_source 查询，服务端官方 SDK 使用已注册 Property ID，无需也不能传凭证或 property。
+- 报告：method="POST", path="runReport", body 为 JSON 字符串，例如 {"dateRanges":[{"startDate":"7daysAgo","endDate":"yesterday"}],"dimensions":[{"name":"sessionSourceMedium"}],"metrics":[{"name":"sessions"},{"name":"activeUsers"}],"limit":100}。
+- 常用指标：activeUsers、totalUsers、newUsers、sessions、engagedSessions、engagementRate、screenPageViews、eventCount、keyEvents、totalRevenue；常用维度：date、yearMonth、sessionSourceMedium、sessionDefaultChannelGroup、sessionCampaignName、country、deviceCategory、eventName、pagePath。自定义事件用 eventName 过滤后查询 eventCount，不猜测自定义指标名称。
+- 维度过滤：dimensionFilter:{filter:{fieldName:"eventName",stringFilter:{matchType:"EXACT",value:"sign_up"}}}，也支持 inListFilter:{values:["a","b"]}，及单层 andGroup/orGroup:{expressions:[{filter:...}]} 或 notExpression:{filter:...}。
+- 排序：orderBys:[{metric:{metricName:"sessions"},desc:true}] 或 [{dimension:{dimensionName:"date"}}]。
+- 不熟悉字段时：method="GET", path="metadata", params:{search:"关键字段名"}，返回该属性可用的指标/维度。字段存在不保证组合兼容。
+- 报告只接受一个 dateRanges、最多9个维度和10个指标、每页最多1000行（默认200）。结果 truncated=true 时不可当完整结果，按 nextOffset 传 offset 继续，或缩小范围。去掉 dimensions 可直接查询整个区间总量，禁止把活跃/总用户数和比率按分组或日期相加。
+- GA4 当前是 SDK 报告直查与查询缓存，不是本地 SQL 表或 Adjust 语义模型；无论是否有本地表，都直接用 query_api_source。需要趋势时选择 date/yearMonth 由 GA4 按期计算。
+- 同一问题需要 Adjust 与 GA4 时分别取数；用户明确“查完 Adjust 再查 Google”时按顺序调用，已取得 Adjust 数据且明确问 GA4 分析指标的追问可直接继续 GA4；campaign 清单、启用/暂停、点击率及投放安装成本必须使用 Google Ads。仅问 GA4 不必强制查 Adjust。保留两边来源，核对 GA4 metadata.timeZone/currencyCode、事件定义、归因窗口和渠道映射后比较；不可把来源不同的 sessions/users 直接视为相同口径。
+- ${API_FAILURE_CONTINUE_HINT} ${API_EMPTY_CONTINUE_HINT}
+- 数据缺失、权限失败、抽样、隐私阈值、(other) 行或近期处理延迟须如实说明。fromCache/cacheState 表示缓存及降级状态，stale 不能声称实时；返回表格可继续交给 show_table/generate_chart。`;
+
+export const GOOGLE_ADS_QUERY_GUIDE = `Google Ads 广告投放数据使用 query_api_source；不是 GA4，不需要 Property ID。不经过 SQL/Adjust 算子，不允许自由 GAQL 或修改广告。
+- 所有操作 method="POST"，path 为操作名，body 为 JSON 字符串。无需凭证。customerId/loginCustomerId 可覆盖默认配置（10 位数字）；loginCustomerId="" 表示直接访问。
+- 无客户 ID：path="accounts", body="{}" 发现直接授权账户。多个账户请让用户选择；path="account", body={"customerId":"1234567890"} 获取账户名称、manager、时区、币种。
+- 经理账户：path="clients", body={"customerId":"经理ID"} 列出子账户。选择实际投放客户后，后续 body 携带 customerId=客户ID、loginCustomerId=有授权关系的经理ID。不要在经理账户上查询投放指标。
+- path="campaigns"：独立于指标的 campaign ID/name/status 列表（排除 REMOVED）。支持 limit 1~100 和 afterId；nextAfterId 非空需续页，未取完不能声称全部。
+- 参数纪律：body 只接受本指南列举的模板字段，多加 name/campaignName/metrics 等任何额外字段会被直接拒绝；不支持按名称过滤，查特定 campaign 必须先 campaigns 取列表再在结果中自行按名称筛选。report 的 campaignId 必须取自 campaigns 结果，不得猜测或用名称代替。method 必须显式传 POST（缺省 GET 会被拒绝）。
+- path="conversionActions"：该客户转化跟踪账户的安装/首次打开动作目录（含 resourceName、type、status）。请明确选择单一正确来源，多个动作不能盲目相加或擅自替用户选择；ANDROID_INSTALLS_ALL_OTHER_APPS 是其他应用安装口径。
+- path="report", body={"campaignId":"123","startDate":"2026-11-01","endDate":"2026-11-07","installAction":"customers/1234567890/conversionActions/456"}；单次最多366天，返回每日曝光、点击、ctr、cost、installs、cpi。installAction 可省略，此时 installs/cpi 是 null（未配置，不是0）。指标以账户时区、币种为准，安装使用指定动作 all_conversions，按广告互动日期归因，不等同商店下载数，也不能等同 Adjust 安装。
+- ctr 为比例；CPI=花费/安装，零安装为 null。区间 CTR/CPI 必须先分别累计分子分母再相除，不能平均每日比率。truncated=true 时按 nextStartDate 继续 report（原 endDate 不变），未取完不能算完整总量。
+- ${API_FAILURE_CONTINUE_HINT} ${API_EMPTY_CONTINUE_HINT}
+- 查完 Adjust 再查 Google 投放数据时按顺序取数，分别标来源。权限错误请展示 codes/help 的真实开通入口，不用空数据冒充成功；账户发现成功不代表报表权限已通过。fromCache 表示短缓存，不声称实时。`;
 
 // ─── 数据分析 Agent（workers.ts） ─────────────────────────────────────────────
 
@@ -95,7 +127,7 @@ export function buildDataAnalystPrompt(dataDictionary: string): string {
 ${dataDictionary}
 
 ## 工作规范（必须遵守）
-1. **算子优先**：标准分析动作必须先调 run_operator——分组聚合/排名/占比→aggregate；趋势/同比/环比→timeseries；异常检测→anomaly；下钻过滤→filter；CPI/CPM/CTR/FD 率/RD 率/ROI 等派生指标→transform；投放计划与实际效果对比→join。数据源路由（本地 PG 库或外部 API 源的本地缓存+API 直查）由算子依据指标所属数据源自动决定——查外部 API 源（如 Adjust）的最新/明细数据同样用 aggregate、filter，指定语义指标 key 与维度 id 即可，不要指定 sourceId/path/上游 slug；仅当算子无法表达（多表自由关联、特殊口径统计）时才用 sql_query
+1. **算子优先**：以下规则适用于已进入语义目录的模型；GA4 和 Google Ads 直接走 query_api_source，遵循各自外部数据源指引，不套用 SQL/Adjust 算子。标准分析动作必须先调 run_operator——分组聚合/排名/占比→aggregate；趋势/同比/环比→timeseries；异常检测→anomaly；下钻过滤→filter；CPI/CPM/CTR/FD 率/RD 率/ROI 等派生指标→transform；投放计划与实际效果对比→join。数据源路由（本地 PG 库或外部 API 源的本地缓存+API 直查）由算子依据指标所属数据源自动决定——查外部 API 源（如 Adjust）的最新/明细数据同样用 aggregate、filter，指定语义指标 key 与维度 id 即可，不要指定 sourceId/path/上游 slug；仅当算子无法表达（多表自由关联、特殊口径统计）时才用 sql_query
 2. **先看结构再查询**：使用 sql_query 时不熟悉列名先用 inspect_schema 确认，禁止瞎猜列名；使用算子时 metric/groupBy 必须取自工具描述中的指标与维度目录，禁止自造
 3. **多步验证**：复杂问题拆成多轮分析（先总览 → 再下钻 → 再对比），通常 2-5 次算子/查询调用；多指标对比逐个调用算子，不要怕多次调用
 4. **数值严谨**：花费/金额保留 2 位小数；比率类指标（CTR/FD 率/转化率等）显示为百分比（算子输出的 *_pct 列已乘 100，自行计算的比率需乘 100）；成本类指标（CPI/CPM）保留 2 位小数
@@ -116,9 +148,13 @@ ${dataDictionary}
 export function dataAnalystExternalSourcesBlock(sourcesSummary: string): string {
   return `
 
+## 外部查询容错
+${API_FAILURE_CONTINUE_HINT}
+${API_EMPTY_CONTINUE_HINT}
+
 ## 已接入的外部数据源（与数据字典中的表平等）
 ${sourcesSummary}
-这些外部数据源与数据字典中的本地表平等，共同构成统一数据集合，不分主次。**判断依据是数据字典里每张表的「本地数据范围」**：已同步入库且目标日期在范围内的数据直接用算子/SQL 分析；一旦目标日期超出本地范围（尤其「今天/昨天/最新/N 号」等近期日期）或本地表为空，直接用 run_operator 的 aggregate/filter 指定该表的语义指标 key 与维度 id——算子会依据指标所属数据源自动经本地缓存+API 直查从对应源（如 Adjust）取回目标日期数据，你无需指定 sourceId/path/上游 slug；语义层未建模的自由 API 探索才用 query_api_source（最多 6 次，命中缓存不消耗配额）；取回的数据与本地数据平等参与分析、交叉验证。外部数据 T+1，今日数据不完整需说明。`;
+这些外部数据源与数据字典中的本地表平等，共同构成统一数据集合，不分主次。**判断依据是数据字典里每张表的「本地数据范围」**：已同步入库且目标日期在范围内的数据直接用算子/SQL 分析；一旦目标日期超出本地范围（尤其「今天/昨天/最新/N 号」等近期日期）或本地表为空，直接用 run_operator 的 aggregate/filter 指定该表的语义指标 key 与维度 id——算子会依据指标所属数据源自动经本地缓存+API 直查从对应源（如 Adjust）取回目标日期数据，你无需指定 sourceId/path/上游 slug；GA4、Google Ads 及语义层未建模的自由 API 探索使用 query_api_source（最多 6 次，命中缓存不消耗配额）；取回的数据与本地数据平等参与分析、交叉验证。外部数据 T+1，今日数据不完整需说明。`;
 }
 
 // ─── 深度研究 Agent（workers.ts） ─────────────────────────────────────────────
