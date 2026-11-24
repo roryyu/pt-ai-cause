@@ -1,20 +1,21 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-// API 连接器 / CSV 解析 / 查询缓存：纯函数隔离测试（不触网、不触达 DB）
-vi.mock("@/lib/env", () => ({
-  env: {
-    DATABASE_URL: "postgresql://localhost:5432/test?schema=cause",
-    MODEL_GATEWAY_BASE_URL: "https://gateway.test/v1",
-    MODEL_GATEWAY_API_KEY: "test-key",
-    MODEL_GATEWAY_DEFAULT_MODEL: "test-model",
-    MODEL_GATEWAY_TIMEOUT_MS: 30000,
-  },
+// API 连接器 / CSV 解析 / 查询缓存：隔离测试（fetch 与 prisma 均 mock，不触网、不触达 DB）
+const envMock = vi.hoisted(() => ({
+  DATABASE_URL: "postgresql://localhost:5432/test?schema=cause",
+  MODEL_GATEWAY_BASE_URL: "https://gateway.test/v1",
+  MODEL_GATEWAY_API_KEY: "test-key",
+  MODEL_GATEWAY_DEFAULT_MODEL: "test-model",
+  MODEL_GATEWAY_TIMEOUT_MS: 30000,
+  ADJUST_QUERY_CACHE_ENABLED: false,
 }));
-vi.mock("@/lib/db", () => ({ prisma: {} }));
+vi.mock("@/lib/env", () => ({ env: envMock }));
+vi.mock("@/lib/db", () => ({ prisma: { apiQueryCache: { findUnique: vi.fn(), update: vi.fn(), upsert: vi.fn() } } }));
 
-import { resolveRequestUrl, parseRetryAfterMs } from "@/lib/server/connectors/api";
+import { resolveRequestUrl, parseRetryAfterMs, type ApiSourceConfig } from "@/lib/server/connectors/api";
 import { parseCsvTable, csvTableToObjects } from "@/lib/server/connectors/csv";
-import { computeApiCacheKey, resolveTtlSeconds, computeBackoffMs } from "@/lib/server/connectors/api-cache";
+import { computeApiCacheKey, resolveTtlSeconds, computeBackoffMs, isAdjustEndpoint, cachedRestRequest } from "@/lib/server/connectors/api-cache";
+import { prisma } from "@/lib/db";
 
 // ─── resolveRequestUrl：base path 保留（20260902 缺陷修复回归） ──────────────
 
@@ -151,5 +152,62 @@ describe("parseRetryAfterMs / computeBackoffMs（429 退避策略）", () => {
     expect(withRetryAfter).toBeLessThan(3_250);
     expect(computeBackoffMs(10)).toBeLessThanOrEqual(10_000);
     expect(computeBackoffMs(0, 60_000)).toBeLessThanOrEqual(10_000);
+  });
+});
+
+// ─── Adjust 查询缓存开关（ADJUST_QUERY_CACHE_ENABLED，默认关闭） ─────────────────
+
+describe("Adjust 查询缓存开关", () => {
+  const config: ApiSourceConfig = { endpoint: "https://automate.adjust.com/reports-service", protocol: "rest", authType: "none" };
+  const input = { method: "GET" as const, path: "csv_report", params: { date_period: "-7d:-1d" } };
+  const options = { sourceId: "data_source_adjust", skipThrottle: true };
+
+  beforeEach(() => {
+    envMock.ADJUST_QUERY_CACHE_ENABLED = false;
+    vi.mocked(prisma.apiQueryCache.findUnique).mockReset().mockResolvedValue(null as never);
+    vi.mocked(prisma.apiQueryCache.update).mockReset().mockResolvedValue({} as never);
+    vi.mocked(prisma.apiQueryCache.upsert).mockReset().mockResolvedValue({} as never);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("day,installs\n2026-11-01,3\n", { headers: { "content-type": "text/csv" } })));
+  });
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it("isAdjustEndpoint：仅识别 adjust.com 及其子域", () => {
+    expect(isAdjustEndpoint("https://automate.adjust.com/reports-service")).toBe(true);
+    expect(isAdjustEndpoint("https://rs.adjust.com/reports-service")).toBe(true);
+    expect(isAdjustEndpoint("https://api.example.com")).toBe(false);
+    expect(isAdjustEndpoint("https://adjust.com.evil.com/x")).toBe(false);
+    expect(isAdjustEndpoint("not-a-url")).toBe(false);
+  });
+
+  it("默认关闭：存在有效缓存也不读不回写，始终直连上游", async () => {
+    vi.mocked(prisma.apiQueryCache.findUnique).mockResolvedValue({ body: "day,installs\n2026-11-01,9\n", status: 200, contentType: "text/csv", elapsedMs: 1, expiresAt: new Date(Date.now() + 60_000) } as never);
+    const result = await cachedRestRequest(config, input, options);
+    expect(result).toMatchObject({ status: 200, fromCache: false, cacheState: "miss" });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(prisma.apiQueryCache.findUnique).not.toHaveBeenCalled();
+    expect(prisma.apiQueryCache.upsert).not.toHaveBeenCalled();
+  });
+
+  it("开启后恢复缓存读写：首次 miss 回写，二次 fresh 命中不打上游", async () => {
+    envMock.ADJUST_QUERY_CACHE_ENABLED = true;
+    const store = new Map<string, Record<string, unknown>>();
+    vi.mocked(prisma.apiQueryCache.findUnique).mockImplementation((({ where }: { where: { cacheKey: string } }) => Promise.resolve(store.get(where.cacheKey) ?? null)) as never);
+    vi.mocked(prisma.apiQueryCache.upsert).mockImplementation((({ where, create, update }: { where: { cacheKey: string }; create: Record<string, unknown>; update: Record<string, unknown> }) => {
+      store.set(where.cacheKey, { ...(store.get(where.cacheKey) ?? create), ...update });
+      return Promise.resolve({});
+    }) as never);
+    const first = await cachedRestRequest(config, input, options);
+    expect(first).toMatchObject({ fromCache: false, cacheState: "miss" });
+    expect(prisma.apiQueryCache.upsert).toHaveBeenCalledTimes(1);
+    const second = await cachedRestRequest(config, input, options);
+    expect(second).toMatchObject({ fromCache: true, cacheState: "fresh" });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("开关不影响非 Adjust REST 源：默认仍读写缓存", async () => {
+    const other: ApiSourceConfig = { ...config, endpoint: "https://api.example.com" };
+    await cachedRestRequest(other, input, options);
+    expect(prisma.apiQueryCache.findUnique).toHaveBeenCalledTimes(1);
+    expect(prisma.apiQueryCache.upsert).toHaveBeenCalledTimes(1);
   });
 });
