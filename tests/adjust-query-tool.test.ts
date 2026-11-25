@@ -44,7 +44,7 @@ function makeTool(source = adjustSource) {
 beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("禁止未模拟的网络请求")));
 });
-afterEach(() => { vi.unstubAllGlobals(); });
+afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
 
 describe("Adjust 源查询方法纪律", () => {
   it("Adjust 域名源注入 GET-only 查询指南，非 Adjust REST 源不注入", () => {
@@ -126,6 +126,33 @@ describe("Adjust 源查询方法纪律", () => {
     vi.mocked(fetch).mockResolvedValue(new Response("[]", { status: 200, headers: { "content-type": "application/json" } }));
     const output = await makeTool().invoke({ sourceId: adjustSource.id, method: "GET", path: "events" });
     expect(JSON.parse(String(output)).status).toBe(200);
+  });
+
+  /** 模拟慢上游：20s 后才响应，signal abort 时拒绝（复现 "This operation was aborted"） */
+  function mockSlowUpstream() {
+    vi.mocked(fetch).mockImplementation((_url, init) => new Promise<Response>((resolve, reject) => {
+      const t = setTimeout(() => resolve(new Response("clicks\n10\n", { status: 200, headers: { "content-type": "text/csv" } })), 20_000);
+      init?.signal?.addEventListener("abort", () => { clearTimeout(t); reject(new Error("This operation was aborted")); });
+    }));
+  }
+
+  it("Adjust 慢报告（>15s）不被通用超时 abort", async () => {
+    vi.useFakeTimers();
+    mockSlowUpstream();
+    const pending = makeTool().invoke({
+      sourceId: adjustSource.id, method: "GET", path: "csv_report",
+      params: { dimensions: "day", metrics: "clicks", date_period: "-30d:-1d" },
+    });
+    await vi.advanceTimersByTimeAsync(25_000);
+    expect(JSON.parse(String(await pending)).status).toBe(200);
+  });
+
+  it("非 Adjust REST 源仍维持 15s 超时", async () => {
+    vi.useFakeTimers();
+    mockSlowUpstream();
+    const pending = makeTool(otherRestSource).invoke({ sourceId: otherRestSource.id, method: "GET", path: "data" });
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(JSON.parse(String(await pending)).error).toContain("aborted");
   });
 });
 

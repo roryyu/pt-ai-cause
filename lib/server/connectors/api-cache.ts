@@ -76,6 +76,10 @@ export function computeBackoffMs(attempt: number, retryAfterMs?: number): number
 
 const lastCallAt = new Map<string, number>();
 
+/** Adjust 报告单请求超时：与 adjust-sync 的 REQUEST_TIMEOUT_MS 同口径（单日 5 维实测 ~12-24s，
+ * 通用 15s 会把慢报告 abort 成 "This operation was aborted"）；总预算仍受 withDeadline 约束 */
+const ADJUST_REQUEST_TIMEOUT_MS = 90_000;
+
 /** 判断 endpoint 是否属于 Adjust 官方域名（adjust.com 及其子域，纯函数） */
 export function isAdjustEndpoint(endpoint: string): boolean {
   try {
@@ -274,12 +278,18 @@ async function cachedRequestWithinDeadline(
   signal.throwIfAborted();
   if (!options.skipThrottle) await throttle(options.sourceId, signal);
   let result: ApiCallResult;
+  // Adjust 官方域名源放宽单请求超时（其他 REST 源维持缺省 15s）
+  const requestOpts = {
+    maxBodyBytes: options.maxBodyBytes,
+    signal,
+    timeoutMs: isAdjustEndpoint(config.endpoint) ? ADJUST_REQUEST_TIMEOUT_MS : undefined,
+  };
   try {
-    result = await executeRestRequest(config, input, { maxBodyBytes: options.maxBodyBytes, signal });
+    result = await executeRestRequest(config, input, requestOpts);
     for (let attempt = 0; attempt < MAX_RETRIES && result.retryable !== false && (result.status === 429 || result.status >= 500); attempt++) {
       await waitWithSignal(computeBackoffMs(attempt, result.retryAfterMs), signal);
       signal.throwIfAborted();
-      result = await executeRestRequest(config, input, { maxBodyBytes: options.maxBodyBytes, signal });
+      result = await executeRestRequest(config, input, requestOpts);
     }
   } catch (error) {
     signal.throwIfAborted();
