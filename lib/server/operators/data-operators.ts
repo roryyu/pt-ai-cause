@@ -302,6 +302,17 @@ async function resolveApiSource(dataSourceId?: string | null): Promise<ResolvedD
   return source && source.type === "api" && source.apiConfig?.endpoint ? source : null;
 }
 
+/**
+ * 算子本地 SQL 执行入口（统一护栏）：ASK_LOCAL_SQL_ENABLED=false 时拒绝执行，
+ * /ask 仅经 API 数据源取数；开关开启时走只读查询。本地同步数据恢复后如需本地分析再置 true。
+ */
+function executeLocalOperatorSql(sql: string, options: { maxRows: number }) {
+  if (!env.ASK_LOCAL_SQL_ENABLED) {
+    throw new Error("本地 SQL 查询已停用（ASK_LOCAL_SQL_ENABLED=false）：/ask 仅经 API 数据源取数，请改用 API 源指标的算子（aggregate/filter/timeseries/anomaly）或 query_api_source");
+  }
+  return executeReadOnlyQuery(env.DATABASE_URL, sql, options);
+}
+
 /** 时间范围 → 上游 date_period（from:to）；缺省近 30 天（Adjust 数据 T+1） */
 function apiDatePeriod(range: TimeRangeInput): string {
   if (range.from && range.to) return `${range.from}:${range.to}`;
@@ -418,6 +429,105 @@ export function aggregateRowsInMemory(
     .map(([key, value]) => ({ [opts.dimId]: key, [opts.metricId]: Math.round(value * 100) / 100 }));
 }
 
+// ─── API 源日序列取数与内存分析（timeseries/anomaly 统一分流，与 aggregate/filter 同口径） ───
+
+/**
+ * API 源指标按日序列取数：仅请求时间维度×单指标（响应小），映射为 {day, value} 并按日期升序
+ * （同日多行累加）。与 aggregate/filter 一样经 cachedRestRequest（开关关闭时直连上游），
+ * 不触达本地落库表；单维度日序列粒度不足，不触发分解落库。
+ */
+async function fetchApiDailySeries(
+  entry: OperatorMetricEntry,
+  models: SemanticModelDef[],
+  range: TimeRangeInput,
+  source: ResolvedDataSource,
+): Promise<
+  | { ok: true; days: Array<{ day: string; value: number }>; notes: string[] }
+  | { ok: false; error: string }
+> {
+  const model = models.find((m) => m.id === entry.modelId);
+  const timeDim = model?.dimensions.find((d) => d.column === entry.timeColumn);
+  if (!model || !timeDim) {
+    return { ok: false, error: `指标 ${entry.id} 所属模型缺少时间维度，无法经 API 取日序列` };
+  }
+  const timeSlug = timeDim.apiSlug ?? timeDim.column;
+  const metricSlug = entry.apiSlug ?? entry.column;
+  const res = await fetchApiReportRows(source, [timeSlug], [metricSlug], apiDatePeriod(range), metricSlug);
+  if (!res.ok) return { ok: false, error: res.error };
+  const acc = new Map<string, number>();
+  for (const r of res.rows) {
+    const day = String(r[timeSlug] ?? "").slice(0, 10);
+    if (!DATE_REGEX.test(day)) continue;
+    acc.set(day, (acc.get(day) ?? 0) + toNum(r[metricSlug]));
+  }
+  const days = [...acc.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([day, value]) => ({ day, value }));
+  return { ok: true, days, notes: res.notes };
+}
+
+/** 时间桶（与 date_trunc 语义一致：day=YYYY-MM-DD，week=ISO 周周一，month=YYYY-MM） */
+export function timeBucketOf(day: string, granularity: "day" | "week" | "month"): string {
+  if (granularity === "month") return day.slice(0, 7);
+  if (granularity === "week") {
+    const d = new Date(`${day}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
+    return d.toISOString().slice(0, 10);
+  }
+  return day;
+}
+
+/** 内存时序环比/同比（与 SQL 窗口语义一致：mom=滞后 1 期，yoy=滞后 YOY_LAG 期；首期/基期为 0 → null） */
+export function computeTimeSeriesRows(
+  days: Array<{ day: string; value: number }>,
+  granularity: "day" | "week" | "month",
+): Record<string, unknown>[] {
+  const buckets = new Map<string, number>();
+  for (const { day, value } of days) {
+    const b = timeBucketOf(day, granularity);
+    buckets.set(b, (buckets.get(b) ?? 0) + value);
+  }
+  const series = [...buckets.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([period, raw]) => [period, Math.round(raw * 100) / 100] as const);
+  const lag = YOY_LAG[granularity] ?? 12;
+  const pct = (value: number, base: number | null) =>
+    base === null || base === 0 ? null : Math.round(((value - base) / base) * 100 * 100) / 100;
+  return series.map(([period, value], i) => ({
+    period,
+    value,
+    mom_pct: pct(value, i >= 1 ? series[i - 1]![1] : null),
+    yoy_pct: pct(value, i >= lag ? series[i - lag]![1] : null),
+  }));
+}
+
+/** 内存异常检测（与 SQL 一致：28 日滚动窗口（28 PRECEDING+CURRENT=29 行）、样本标准差、|z|>阈值，按异常程度降序取前 30） */
+export function computeAnomalyRows(
+  days: Array<{ day: string; value: number }>,
+  threshold: number,
+): Record<string, unknown>[] {
+  const sorted = [...days].sort((a, b) => a.day.localeCompare(b.day));
+  const out = sorted.map((d, i) => {
+    const window = sorted.slice(Math.max(0, i - 28), i + 1).map((x) => x.value);
+    const n = window.length;
+    const mean = window.reduce((s, v) => s + v, 0) / n;
+    const std = n > 1 ? Math.sqrt(window.reduce((s, v) => s + (v - mean) ** 2, 0) / (n - 1)) : 0;
+    const z = std === 0 ? null : Math.round(((d.value - mean) / std) * 100) / 100;
+    return {
+      date: d.day,
+      value: Math.round(d.value * 10000) / 10000,
+      baseline: Math.round(mean * 10000) / 10000,
+      z_score: z,
+      flag: z !== null && Math.abs(z) > threshold ? "异常" : "正常",
+      absZ: z === null ? 0 : Math.abs(z),
+    };
+  });
+  return out
+    .sort((a, b) => b.absZ - a.absZ)
+    .slice(0, 30)
+    .map(({ absZ: _absZ, ...row }) => row);
+}
+
 // ─── AggregateOp：分组聚合 ────────────────────────────────────────────────────
 
 export const AggregateOpMeta: OperatorMeta = {
@@ -511,7 +621,7 @@ export async function runAggregateOp(input: z.infer<typeof AggregateInput>): Pro
   }
   const sql = buildAggregateSql(entry, dim, input);
   try {
-    const result = await executeReadOnlyQuery(env.DATABASE_URL, sql, { maxRows: 200 });
+    const result = await executeLocalOperatorSql(sql, { maxRows: 200 });
     return {
       ok: true, operatorId: "aggregate", columns: result.columns, rows: result.rows,
       rowCount: result.rowCount, sql, elapsedMs: Date.now() - start,
@@ -579,9 +689,25 @@ export async function runTimeSeriesOp(input: z.infer<typeof TimeSeriesInput>): P
   if (!entry.supportsTime) {
     return failed("timeseries", new Error(`指标 ${input.metric} 所属模型无日期时间列，不支持时序分析`), start);
   }
+  // 统一分流：API 源指标 → API 日序列 + 内存环比/同比（不触达本地落库表，开关关闭时直连上游）；PG 源 → 本地 SQL
+  const apiSource = await resolveApiSource(entry.dataSourceId);
+  if (apiSource) {
+    const series = await fetchApiDailySeries(entry, models, input, apiSource);
+    if (!series.ok) return failed("timeseries", new Error(series.error), start);
+    const rows = computeTimeSeriesRows(series.days, input.granularity);
+    return {
+      ok: true, operatorId: "timeseries", columns: ["period", "value", "mom_pct", "yoy_pct"], rows,
+      rowCount: rows.length, elapsedMs: Date.now() - start,
+      notes: [
+        `指标 ${entry.id}（${entry.name}）来自 API 源「${apiSource.name}」，经本地缓存+API直查取日序列并内存计算环比/同比`,
+        "mom_pct=环比%，yoy_pct=同比%；粒度越细同比所需历史数据越长",
+        ...series.notes,
+      ],
+    };
+  }
   const sql = buildTimeSeriesSql(entry, input);
   try {
-    const result = await executeReadOnlyQuery(env.DATABASE_URL, sql, { maxRows: 800 });
+    const result = await executeLocalOperatorSql(sql, { maxRows: 800 });
     return {
       ok: true, operatorId: "timeseries", columns: result.columns, rows: result.rows,
       rowCount: result.rowCount, sql, elapsedMs: Date.now() - start,
@@ -652,9 +778,26 @@ export async function runAnomalyOp(input: z.infer<typeof AnomalyInput>): Promise
   if (!entry.supportsTime) {
     return failed("anomaly", new Error(`指标 ${input.metric} 所属模型无日期时间列，不支持异常检测`), start);
   }
+  // 统一分流：API 源指标 → API 日序列 + 内存 Z-Score（不触达本地落库表，开关关闭时直连上游）；PG 源 → 本地 SQL
+  const apiSource = await resolveApiSource(entry.dataSourceId);
+  if (apiSource) {
+    const series = await fetchApiDailySeries(entry, models, input, apiSource);
+    if (!series.ok) return failed("anomaly", new Error(series.error), start);
+    const rows = computeAnomalyRows(series.days, input.threshold);
+    const anomalyCount = rows.filter((r) => r.flag === "异常").length;
+    return {
+      ok: true, operatorId: "anomaly", columns: ["date", "value", "baseline", "z_score", "flag"], rows,
+      rowCount: rows.length, elapsedMs: Date.now() - start,
+      notes: [
+        `指标 ${entry.id}（${entry.name}）来自 API 源「${apiSource.name}」，经本地缓存+API直查取日序列并内存检测异常`,
+        `按 |z| > ${input.threshold} 判定，检出 ${anomalyCount} 个异常日（结果按异常程度排序）`,
+        ...series.notes,
+      ],
+    };
+  }
   const sql = buildAnomalySql(entry, input);
   try {
-    const result = await executeReadOnlyQuery(env.DATABASE_URL, sql, { maxRows: 50 });
+    const result = await executeLocalOperatorSql(sql, { maxRows: 50 });
     const anomalyCount = result.rows.filter((r) => r.flag === "异常").length;
     return {
       ok: true, operatorId: "anomaly", columns: result.columns, rows: result.rows,
@@ -771,7 +914,7 @@ export async function runFilterOp(input: z.infer<typeof FilterInput>): Promise<O
   }
   const sql = buildFilterSql(model, dims, metricExprs, filters, input);
   try {
-    const result = await executeReadOnlyQuery(env.DATABASE_URL, sql, { maxRows: 200 });
+    const result = await executeLocalOperatorSql(sql, { maxRows: 200 });
     return {
       ok: true, operatorId: "filter", columns: result.columns, rows: result.rows,
       rowCount: result.rowCount, sql, elapsedMs: Date.now() - start,
@@ -884,7 +1027,7 @@ export async function runTransformOp(input: z.infer<typeof TransformInput>): Pro
     return failed("transform", error, start);
   }
   try {
-    const result = await executeReadOnlyQuery(env.DATABASE_URL, sql, { maxRows: 100 });
+    const result = await executeLocalOperatorSql(sql, { maxRows: 100 });
     return {
       ok: true, operatorId: "transform", columns: result.columns, rows: result.rows,
       rowCount: result.rowCount, sql, elapsedMs: Date.now() - start,
@@ -983,7 +1126,7 @@ export async function runJoinOp(input: z.infer<typeof JoinInput>): Promise<Opera
     return failed("join", error, start);
   }
   try {
-    const result = await executeReadOnlyQuery(env.DATABASE_URL, sql, { maxRows: 50 });
+    const result = await executeLocalOperatorSql(sql, { maxRows: 50 });
     return {
       ok: true, operatorId: "join", columns: result.columns, rows: result.rows,
       rowCount: result.rowCount, sql, elapsedMs: Date.now() - start,

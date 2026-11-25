@@ -86,6 +86,73 @@ export function isAdjustEndpoint(endpoint: string): boolean {
   }
 }
 
+/** Adjust 报告终端（必传 date_period；/events、/filters-data 等辅助终端不需要） */
+const ADJUST_REPORT_PATHS = new Set(["csv_report", "report", "pivot_report", "parquet_report"]);
+export function isAdjustReportPath(path?: string): boolean {
+  return ADJUST_REPORT_PATHS.has((path ?? "").replace(/^\/+/, ""));
+}
+
+const ABS_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+/** Adjust 支持的逻辑日期（doc/Adjust官网API与MCP对接指南 §1.4） */
+const ADJUST_LOGICAL_PERIODS = new Set([
+  "today", "yesterday", "this_week", "last_week", "this_month", "last_month",
+  "this_quarter", "last_quarter", "this_year", "last_year",
+]);
+
+export type AdjustParamsResult =
+  | { ok: true; params: Record<string, string>; fixes: string[] }
+  | { ok: false; error: string };
+
+/**
+ * Adjust 报告终端参数纠正（纯函数）：query_api_source 自由填参时模型常混用
+ * GA4/Google Ads 日期写法（缺 date_period、斜杠区间、last_30_days）。
+ * 机械可纠正的直接纠正（fixes 留痕），不可纠正的本地拦截给提示，不发上游白耗 400。
+ */
+export function normalizeAdjustReportParams(input: Record<string, string>): AdjustParamsResult {
+  const params = { ...input };
+  const fixes: string[] = [];
+  let period = params.date_period?.trim();
+  // GA4/Google Ads 式 start/end 字段 → date_period（两侧均为合法绝对日期才合并，别名键移除）
+  if (!period) {
+    const from = params.start_date ?? params.startDate ?? params.from;
+    const to = params.end_date ?? params.endDate ?? params.to;
+    if (from && to && ABS_DATE_RE.test(from) && ABS_DATE_RE.test(to)) {
+      period = `${from}:${to}`;
+      for (const k of ["start_date", "startDate", "from", "end_date", "endDate", "to"]) delete params[k];
+      fixes.push(`start/end 字段已合并为 date_period=${period}`);
+    }
+  }
+  if (!period) {
+    return { ok: false, error: "缺少 date_period（Adjust 必填时间参数）。支持：逻辑日期（yesterday/this_month 等）、绝对区间 YYYY-MM-DD:YYYY-MM-DD（冒号分隔）、相对区间 -30d:-1d" };
+  }
+  // 斜杠分隔的绝对日期 → 冒号
+  const slash = period.match(/^(\d{4}-\d{2}-\d{2})\/(\d{4}-\d{2}-\d{2})$/);
+  if (slash) {
+    period = `${slash[1]}:${slash[2]}`;
+    fixes.push("日期分隔符 '/' 已纠正为 ':'");
+  }
+  // GA4 式 last_N_days → Adjust 相对区间（数据 T+1，截至昨日）
+  const lastN = period.match(/^last_(\d+)_days?$/i);
+  if (lastN) {
+    const n = Number(lastN[1]);
+    period = `-${n}d:-1d`;
+    fixes.push(`last_${n}_days 已纠正为 -${n}d:-1d`);
+  }
+  // 单个绝对日期 → 同日区间
+  if (ABS_DATE_RE.test(period)) {
+    fixes.push(`单日期已扩为同日区间 ${period}:${period}`);
+    period = `${period}:${period}`;
+  }
+  const valid = ADJUST_LOGICAL_PERIODS.has(period)
+    || /^\d{4}-\d{2}-\d{2}:\d{4}-\d{2}-\d{2}$/.test(period)
+    || /^-\d+[dwmy]:-\d+[dwmy]$/.test(period);
+  if (!valid) {
+    return { ok: false, error: `date_period 格式不支持："${period}"。支持：逻辑日期（yesterday/this_month 等）、YYYY-MM-DD:YYYY-MM-DD（冒号分隔）、-30d:-1d；不支持 last_30_days/30daysAgo 等 GA4 式写法` };
+  }
+  params.date_period = period;
+  return { ok: true, params, fixes };
+}
+
 /** 计算缓存键：method + endpoint + path + params（按 key 排序，保证稳定性） */
 export function computeApiCacheKey(
   method: string,

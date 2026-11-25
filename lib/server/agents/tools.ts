@@ -4,7 +4,7 @@ import { executeReadOnlyQuery, introspectSchema } from "@/lib/server/connectors/
 import { webSearch, fetchPage } from "@/lib/server/connectors/web";
 import { executeGraphQLQuery } from "@/lib/server/connectors/api";
 import { withDeadline, QueryTimeoutError, API_QUERY_TIMEOUT_MS } from "@/lib/server/connectors/deadline";
-import { cachedRestRequest } from "@/lib/server/connectors/api-cache";
+import { cachedRestRequest, isAdjustEndpoint, isAdjustReportPath, normalizeAdjustReportParams } from "@/lib/server/connectors/api-cache";
 import { parseCsvTable, csvTableToObjects } from "@/lib/server/connectors/csv";
 import { runMcpReactAgent } from "@/lib/server/connectors/mcp";
 import { displayEndpoint, listDataSources, type ResolvedDataSource } from "@/lib/server/connectors/datasources";
@@ -16,7 +16,7 @@ import { env } from "@/lib/env";
 import { DEMO_SEMANTIC_MODELS, semanticContextSummary, type SemanticModelDef } from "@/lib/server/semantic/semantic-query";
 import type { AgentRunContext, ChartSpec, TablePayload } from "./events";
 import { nextStepId } from "./events";
-import { GA4_QUERY_GUIDE, GOOGLE_ADS_QUERY_GUIDE, API_FAILURE_CONTINUE_HINT, API_EMPTY_CONTINUE_HINT } from "./prompts";
+import { GA4_QUERY_GUIDE, GOOGLE_ADS_QUERY_GUIDE, ADJUST_QUERY_GUIDE, API_FAILURE_CONTINUE_HINT, API_EMPTY_CONTINUE_HINT } from "./prompts";
 import { serializeGoogleAdsResult } from "@/lib/server/connectors/google-ads";
 
 /**
@@ -129,6 +129,15 @@ export function createSqlQueryTool(ctx: AgentRunContext) {
       const startedAt = Date.now();
       ctx.sink({ type: "tool_call", stepId, tool: "sql_query", input });
       try {
+        // 护栏：数据落地开关关闭的 Adjust 本地表无有效数据，禁止 sql_query 本地查询（会返回空结果误导），
+        // 拒绝并指路 run_operator 直连 API，避免模型查本地空表后误判「无数据/不存在」而放弃取数
+        const forbidden = await localQueryForbiddenTables();
+        const hit = [...forbidden].find((t) => new RegExp(`\\b${t}\\b`, "i").test(input.sql));
+        if (hit) {
+          const msg = `表 ${hit} 的数据落地开关已关闭（ADJUST_QUERY_CACHE_ENABLED=false），本地无有效数据，不能用 sql_query 本地查询。请改用 run_operator 直连 Adjust API：用该表语义指标 key（如 adjust_daily_metrics.clicks）调 aggregate/filter/timeseries/anomaly；需按计划/渠道等维度筛选或模糊匹配名称时，用 aggregate 的 groupBy 传该维度 id（如 campaign_network）取回各维度值明细，再在返回行内匹配目标名称，不要用 sql_query 查本地表。`;
+          ctx.sink({ type: "tool_result", stepId, tool: "sql_query", summary: `拒绝本地查询 ${hit}（应经算子直连 API）` });
+          return JSON.stringify({ error: msg });
+        }
         const result = await executeReadOnlyQuery(env.DATABASE_URL, input.sql, {
           maxRows: 300,
           timeoutMs: 20_000,
@@ -167,7 +176,7 @@ export function createSqlQueryTool(ctx: AgentRunContext) {
     },
     {
       name: "sql_query",
-      description: `对 PostgreSQL 数据库执行只读 SELECT 查询（search_path=data，汇集各数据源同步入库的表，所有表平等可查）。常用表：daily_metrics(stat_date,region,channel,gmv,orders,active_users,new_users,conversion_rate,avg_order_value)、orders(order_no,user_id,region,channel,category,product_id,amount,quantity,status,created_at)、products(name,category,price,cost)、regions(name,tier)、channel_daily_metrics(stat_date,ad_channel,platform,region,spend,impressions,clicks,downloads,registrations,fd_users,fd_amount,rd_users,rd_amount；投放渠道效果分析：ad_channel取值Meta/X/TikTok，platform取值app/web，fd=首次充钱，rd=召回再充钱)、channel_campaigns(campaign_no,ad_channel,platform,objective,campaign_name,status,start_date,daily_budget,total_spend,downloads,registrations,fd_users,rd_users)。此外数据字典中列出的其他表（如 Adjust 同步入库的 adjust_daily_metrics：stat_date,network,country_code,impressions,clicks,installs,sessions,register_cnt,first_deposit_cnt,recall_deposit_cnt,network_cost）同样可查询，完整表/列结构用 inspect_schema 确认。日期类 stat_date 列为 DATE 类型。仅允许单条 SELECT/WITH 语句。`,
+      description: `对 PostgreSQL 数据库执行只读 SELECT 查询（search_path=data，仅限本地 BI/演示表；标注「本表不做本地查询」的 API 源表如 Adjust adjust_daily_metrics 请用 run_operator 直连 API，不要在此查询）。常用表：daily_metrics(stat_date,region,channel,gmv,orders,active_users,new_users,conversion_rate,avg_order_value)、orders(order_no,user_id,region,channel,category,product_id,amount,quantity,status,created_at)、products(name,category,price,cost)、regions(name,tier)、channel_daily_metrics(stat_date,ad_channel,platform,region,spend,impressions,clicks,downloads,registrations,fd_users,fd_amount,rd_users,rd_amount；投放渠道效果分析：ad_channel取值Meta/X/TikTok，platform取值app/web，fd=首次充钱，rd=召回再充钱)、channel_campaigns(campaign_no,ad_channel,platform,objective,campaign_name,status,start_date,daily_budget,total_spend,downloads,registrations,fd_users,rd_users)。完整表/列结构用 inspect_schema 确认。日期类 stat_date 列为 DATE 类型。仅允许单条 SELECT/WITH 语句。`,
       schema: z.object({
         sql: z.string().describe("只读 SQL 查询语句（SELECT 或 WITH 开头）"),
       }),
@@ -451,6 +460,7 @@ export function externalSourcesSummary(sources: ResolvedDataSource[]): string {
   return [summary,
     sources.some((s) => s.apiConfig?.protocol === "ga4") ? GA4_QUERY_GUIDE : "",
     sources.some((s) => s.apiConfig?.protocol === "google_ads") ? GOOGLE_ADS_QUERY_GUIDE : "",
+    sources.some((s) => s.type === "api" && isAdjustEndpoint(s.apiConfig?.endpoint ?? "")) ? ADJUST_QUERY_GUIDE : "",
   ].filter(Boolean).join("\n");
 }
 
@@ -595,12 +605,32 @@ export function createApiSourceTool(ctx: AgentRunContext, sources: ResolvedDataS
               parsedBody = input.body;
             }
           }
+          // Adjust RS API 只接受 GET + query 参数：POST/body 必 405，本地拦截并给纠正提示
+          //（不浪费上游配额与调用预算；Agent 看到具体错因才能自我纠正）
+          if (isAdjustEndpoint(source.apiConfig.endpoint) && (input.method === "POST" || input.body)) {
+            const msg = "Adjust 报告服务仅支持 GET + params（dimensions/metrics/date_period，过滤用 campaign_network__contains 等后缀操作符）；POST 或 body 会被 405 拒绝。请改用 GET 并把条件放入 params";
+            ctx.sink({ type: "tool_result", stepId, tool: "query_api_source", summary: `失败: ${msg}` });
+            return JSON.stringify({ error: msg });
+          }
+          // Adjust 报告终端参数纠正：模型常混用 GA4/Google 日期写法（缺 date_period、斜杠区间、last_30_days），
+          // 机械可纠正的直接纠正（paramFixes 留痕），不可纠正的本地拦截，不发上游白耗 400
+          let restParams = input.params;
+          let paramFixes: string[] = [];
+          if (isAdjustEndpoint(source.apiConfig.endpoint) && isAdjustReportPath(input.path)) {
+            const normalized = normalizeAdjustReportParams(input.params ?? {});
+            if (!normalized.ok) {
+              ctx.sink({ type: "tool_result", stepId, tool: "query_api_source", summary: `失败: ${normalized.error}` });
+              return JSON.stringify({ error: normalized.error });
+            }
+            restParams = normalized.params;
+            paramFixes = normalized.fixes;
+          }
           const result = await cachedRestRequest(
             source.apiConfig,
             {
               method: input.method ?? "GET",
               path: input.path,
-              params: input.params,
+              params: restParams,
               body: parsedBody,
             },
             { sourceId: source.id },
@@ -630,9 +660,10 @@ export function createApiSourceTool(ctx: AgentRunContext, sources: ResolvedDataS
               note: table.rows.length > 200 ? `共 ${table.rows.length} 行，已截断至前 200 行` : "",
               fromCache: result.fromCache,
               cacheState: result.cacheState,
+              ...(paramFixes.length ? { paramFixes } : {}),
             });
           }
-          return JSON.stringify({ status: result.status, body: result.body, truncated: result.truncated, fromCache: result.fromCache, cacheState: result.cacheState });
+          return JSON.stringify({ status: result.status, body: result.body, truncated: result.truncated, fromCache: result.fromCache, cacheState: result.cacheState, ...(paramFixes.length ? { paramFixes } : {}) });
         } catch (error) {
           const google = source.apiConfig.protocol === "ga4" || source.apiConfig.protocol === "google_ads";
           // Google 源保留具体错误（模板校验等参数级信息，不含凭证；上游错误已经 googleAdsError 脱敏、不会走到这里），
@@ -750,6 +781,26 @@ async function queryTableFreshness(
 }
 
 /**
+ * 数据落地开关关闭的 Adjust 官方源本地表名集合（小写）——这些表本地无有效数据，
+ * sql_query 不应本地查询（会返回空结果误导模型），须由 run_operator 直连 API。开关开启时返回空集。
+ */
+async function localQueryForbiddenTables(): Promise<Set<string>> {
+  if (env.ADJUST_QUERY_CACHE_ENABLED) return new Set();
+  const [models, sources] = await Promise.all([
+    runtimeSemanticModels(),
+    listDataSources().catch(() => [] as Array<ResolvedDataSource & { status: string }>),
+  ]);
+  const adjustDirectIds = new Set(
+    sources.filter((s) => s.type === "api" && isAdjustEndpoint(s.apiConfig?.endpoint ?? "")).map((s) => s.id),
+  );
+  const forbidden = new Set<string>();
+  for (const m of models) {
+    if (m.dataSourceId && adjustDirectIds.has(m.dataSourceId)) forbidden.add(m.table.toLowerCase());
+  }
+  return forbidden;
+}
+
+/**
  * 数据字典（运行时全量语义模型：内置 + DB 自定义，如 Adjust 投放日指标）
  *
  * 关键：为每张表注入「本地数据新鲜度」（时间范围 + 行数）与「来源血缘」，让 LLM 能判断
@@ -777,10 +828,18 @@ export async function runtimeTablesHint(): Promise<string> {
       // 血缘：关联外部 API 源的本地表，范围外由算子（aggregate/filter）自动直连该源补取最新
       const src = m.dataSourceId ? sourceById.get(m.dataSourceId) : undefined;
       if (src?.type === "api") {
-        line += ` | 数据由「${src.name}」API 同步入库；查本地范围外的最新/明细数据仍用 aggregate、filter 指定该表的语义指标 key 与维度 id，算子会自动直连该 API 源（经本地缓存+API 直查）取回，无需关心 sourceId/path/上游 slug`;
+        // Adjust 数据落地开关关闭：本地表不参与查询（存量仅历史参考），取数一律经算子直连 API
+        const adjustDirect = isAdjustEndpoint(src.apiConfig?.endpoint ?? "") && !env.ADJUST_QUERY_CACHE_ENABLED;
+        line += adjustDirect
+          ? ` | 数据落地开关已关闭（ADJUST_QUERY_CACHE_ENABLED=false）：本表不做本地查询（存量仅历史参考，勿用 sql_query），取数一律用 aggregate/filter/timeseries/anomaly 算子直连「${src.name}」API；按计划/渠道等维度筛选或模糊匹配名称时，用 aggregate 的 groupBy 传该维度 id（如 campaign_network）取回各维度值明细，再在结果行内匹配目标名称`
+          : ` | 数据由「${src.name}」API 同步入库；查本地范围外的最新/明细数据仍用 aggregate、filter 指定该表的语义指标 key 与维度 id，算子会自动直连该 API 源（经本地缓存+API 直查）取回，无需关心 sourceId/path/上游 slug`;
       }
       return line;
     }),
   );
-  return lines.join("\n");
+  // 本地 SQL 通路断开：字典置顶横幅，本地表仅供结构参考，取数一律经 API 数据源
+  const banner = env.ASK_LOCAL_SQL_ENABLED
+    ? ""
+    : "⚠️ 本地 SQL 查询已停用（ASK_LOCAL_SQL_ENABLED=false）：下列本地表仅供结构参考、不可查询（sql_query 不可用，算子本地 SQL 路径已断开）；取数一律经 API 数据源——Adjust 等已建模 API 源用 run_operator（aggregate/filter/timeseries/anomaly 自动直连 API），GA4/Google Ads 用 query_api_source。\n";
+  return banner + lines.join("\n");
 }

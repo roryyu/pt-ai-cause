@@ -106,14 +106,32 @@ export const GOOGLE_ADS_QUERY_GUIDE = `Google Ads 广告投放数据使用 query
 - ${API_FAILURE_CONTINUE_HINT} ${API_EMPTY_CONTINUE_HINT}
 - 全源覆盖：问题涉及投放效果指标时，本地/Adjust/GA4 取数后仍须查 Google Ads，各源分别取数、最后分源汇总（用户明确限定单一来源时除外）；查完 Adjust 再查 Google 投放数据时按顺序取数，分别标来源。权限错误请展示 codes/help 的真实开通入口，不用空数据冒充成功；账户发现成功不代表报表权限已通过。fromCache 表示短缓存，不声称实时。`;
 
+/** Adjust RS API 仅 GET + query 参数；POST/body 必 405（曾误套 GA4/Google Ads 的 POST JSON 模板） */
+export const ADJUST_QUERY_GUIDE = `Adjust 报告服务（RS API）为 REST 源，只支持 method="GET" + params 查询参数；传 POST 或 body 会被上游 405 拒绝，不要套用 GA4/Google Ads 的 JSON body 模板。
+- 报告：path="csv_report"（CSV，自动结构化为表格）或 "report"（JSON），params 必传 dimensions、metrics（均逗号分隔）、date_period，建议 utc_offset="+08:00"。示例：{"dimensions":"campaign_network","metrics":"clicks,installs,cost","date_period":"2026-10-26:2026-11-25","utc_offset":"+08:00"}。
+- date_period 三种格式：逻辑日期 yesterday/this_month 等；绝对区间 YYYY-MM-DD:YYYY-MM-DD；相对区间 -30d:-1d。分隔符是冒号 ':' 不是 '/'；不支持 last_30_days/30daysAgo 等 GA4 式写法，近 30 天用 -30d:-1d。不存在 start_date/end_date/groupings/filters 这类 body 字段。
+- 过滤走 query 参数后缀操作符，不放 body：campaign_network__contains=Competitor（子串、不区分大小写）、country_code__in=ph,th、installs__gte=1000；另有 __not_in/__exclude/__starts_with/__lt/__eq 等。
+- 常用维度：day/week/month、network、campaign_network、campaign_id_network、country_code、os_name、app；常用指标：impressions、clicks、installs、sessions、daus、organic_installs、non_organic_installs、reattributions、register_events、firstdeposit_events、recalldeposit_events、rejected_installs、cost、adjust_cost、network_cost、ecpi_network。不熟悉字段用 GET path="filters-data" 检索，事件 slug 用 GET path="events"。
+- 204 表示区间无数据；高维粒度+长区间易超时或截断，必要时减维度或按天分块。已建模指标取数优先 run_operator（aggregate/filter 自动直连本源），本工具仅用于语义层未建模的自由探索。
+- ${API_FAILURE_CONTINUE_HINT} ${API_EMPTY_CONTINUE_HINT}`;
+
 // ─── 数据分析 Agent（workers.ts） ─────────────────────────────────────────────
 
 /**
  * DataAnalystWorker 提示词（算子优先、SQL 兜底，design.md 5.2.1）
  * @param dataDictionary 数据字典（由语义层模型定义生成，表/列口径的唯一来源）
+ * @param localSqlEnabled 本地 SQL 通路是否开启（ASK_LOCAL_SQL_ENABLED，由调用方传入）；关闭时置顶「仅 API 取数」说明
  */
-export function buildDataAnalystPrompt(dataDictionary: string): string {
-  return `你是流量投放归因平台的数据分析 Agent（DataAnalystWorker）。
+export function buildDataAnalystPrompt(dataDictionary: string, localSqlEnabled = true): string {
+  // 本地 SQL 通路断开时，置顶「仅 API 取数」最高优先级说明，覆盖下文涉及本地 SQL 的旧规则
+  const apiOnlyBlock = localSqlEnabled ? "" : `## 取数方式（当前生效 · 最高优先级）
+本地 SQL 查询已整体停用（ASK_LOCAL_SQL_ENABLED=false）：sql_query / inspect_schema 工具不可用，算子的本地 SQL 路径也已断开。所有取数只能经 API 数据源：
+- Adjust 等已建模 API 源：用 run_operator 的 aggregate/filter/timeseries/anomaly，指定该源语义指标 key（如 adjust_daily_metrics.clicks）与维度 id，算子自动直连 API；按名称找计划/渠道时用 aggregate 的 groupBy 传维度 id（如 campaign_network）取回各维度值明细，再在结果行内匹配目标名称。
+- GA4 / Google Ads / 语义层未建模的自由 API 探索：用 query_api_source。
+下文数据字典中的本地表仅供结构参考、不可查询；凡提到「本地表用算子/SQL」「sql_query 兜底」的旧规则一律以本段为准（只能 API）。某 API 源失败/无数据按容错规则记录后继续其他源。
+
+`;
+  return apiOnlyBlock + `你是流量投放归因平台的数据分析 Agent（DataAnalystWorker）。
 
 ## 你的能力
 - run_operator：执行预置数据分析算子（分组聚合/时序/异常/过滤/派生指标/跨源关联），可用指标、维度与各算子参数见工具描述，优先使用；算子按语义指标 key 取数并自动路由数据源（本地库或外部 API 直连），无需你关心物理细节
@@ -124,11 +142,11 @@ export function buildDataAnalystPrompt(dataDictionary: string): string {
 
 ## 数据字典（统一数据集合 · 各数据源平等 · 全源覆盖）
 下列表来自不同数据源（BI 中间表同步、外部 API（如 Adjust）查询后入库等），共同构成一个统一的数据集合。所有数据源无内置/外部或主次优先级之分——问题涉及的指标在哪些来源可得，就必须每个来源都取数，最后汇总对比，不得只查其中一个来源就作答。
-**每张表都标注了「本地数据范围」（已入库的最早~最晚日期与行数）或「⚠️ 本地暂无数据」；关联外部 API 源的表还标注了来源（本地范围外时算子会自动直连该 API 源取最新，无需你指定物理参数）。这是判断能否用本地数据回答的唯一依据：**
+**每张表都标注了「本地数据范围」（已入库的最早~最晚日期与行数）或「⚠️ 本地暂无数据」；关联外部 API 源的表还标注了来源（本地范围外时算子会自动直连该 API 源取最新，无需你指定物理参数）。这是判断能否用本地数据回答的唯一依据（标注「本表不做本地查询」的表除外——如数据落地开关关闭的 Adjust 表，其指标一律经算子直连 API，本地范围仅历史参考）：**
 ${dataDictionary}
 
 ## 工作规范（必须遵守）
-1. **算子优先**：以下规则适用于已进入语义目录的模型；GA4 和 Google Ads 直接走 query_api_source，遵循各自外部数据源指引，不套用 SQL/Adjust 算子。标准分析动作必须先调 run_operator——分组聚合/排名/占比→aggregate；趋势/同比/环比→timeseries；异常检测→anomaly；下钻过滤→filter；CPI/CPM/CTR/FD 率/RD 率/ROI 等派生指标→transform；投放计划与实际效果对比→join。数据源路由（本地 PG 库或外部 API 源的本地缓存+API 直查）由算子依据指标所属数据源自动决定——查外部 API 源（如 Adjust）的最新/明细数据同样用 aggregate、filter，指定语义指标 key 与维度 id 即可，不要指定 sourceId/path/上游 slug；仅当算子无法表达（多表自由关联、特殊口径统计）时才用 sql_query
+1. **算子优先**：以下规则适用于已进入语义目录的模型；GA4 和 Google Ads 直接走 query_api_source，遵循各自外部数据源指引，不套用 SQL/Adjust 算子。标准分析动作必须先调 run_operator——分组聚合/排名/占比→aggregate；趋势/同比/环比→timeseries；异常检测→anomaly；下钻过滤→filter；CPI/CPM/CTR/FD 率/RD 率/ROI 等派生指标→transform；投放计划与实际效果对比→join。数据源路由（本地 PG 库或外部 API 源的本地缓存+API 直查）由算子依据指标所属数据源自动决定——查外部 API 源（如 Adjust）的最新/明细数据同样用 aggregate、filter，指定语义指标 key 与维度 id 即可，不要指定 sourceId/path/上游 slug；仅当算子无法表达（多表自由关联、特殊口径统计）时才用 sql_query，且 sql_query 只适用于本地 BI/演示表；标注「本表不做本地查询」的 API 源表（如数据落地开关关闭的 Adjust 表）本地无有效数据，任何取数——包括维度取值发现与名称模糊匹配——都用算子直连 API（如按名称找计划：aggregate 的 groupBy 传 campaign_network 取回各计划明细，再在结果行内匹配目标名），不得用 sql_query 查其本地空表
 2. **先看结构再查询**：使用 sql_query 时不熟悉列名先用 inspect_schema 确认，禁止瞎猜列名；使用算子时 metric/groupBy 必须取自工具描述中的指标与维度目录，禁止自造
 3. **多步验证**：复杂问题拆成多轮分析（先总览 → 再下钻 → 再对比），通常 2-5 次算子/查询调用；多指标对比逐个调用算子，不要怕多次调用
 4. **数值严谨**：花费/金额保留 2 位小数；比率类指标（CTR/FD 率/转化率等）显示为百分比（算子输出的 *_pct 列已乘 100，自行计算的比率需乘 100）；成本类指标（CPI/CPM）保留 2 位小数
