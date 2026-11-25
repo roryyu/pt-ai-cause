@@ -1,15 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // 算子测试：隔离 DB 与环境变量依赖（与 semantic-models.test.ts 同模式）
-vi.mock("@/lib/env", () => ({
-  env: {
-    DATABASE_URL: "postgresql://localhost:5432/test?schema=cause",
-    MODEL_GATEWAY_BASE_URL: "https://gateway.test/v1",
-    MODEL_GATEWAY_API_KEY: "test-key",
-    MODEL_GATEWAY_DEFAULT_MODEL: "test-model",
-    MODEL_GATEWAY_TIMEOUT_MS: 30000,
-  },
+const envMock = vi.hoisted(() => ({
+  DATABASE_URL: "postgresql://localhost:5432/test?schema=cause",
+  MODEL_GATEWAY_BASE_URL: "https://gateway.test/v1",
+  MODEL_GATEWAY_API_KEY: "test-key",
+  MODEL_GATEWAY_DEFAULT_MODEL: "test-model",
+  MODEL_GATEWAY_TIMEOUT_MS: 30000,
+  ADJUST_QUERY_CACHE_ENABLED: true,
+  ASK_LOCAL_SQL_ENABLED: true,
 }));
+vi.mock("@/lib/env", () => ({ env: envMock }));
 vi.mock("@/lib/server/connectors/postgres", () => ({
   executeReadOnlyQuery: vi.fn(),
 }));
@@ -381,6 +382,7 @@ const ADJUST_SOURCE = {
 
 describe("统一取数分流层（API 源自动本地缓存+API 直查，PG 源本地 SQL）", () => {
   beforeEach(() => {
+    envMock.ADJUST_QUERY_CACHE_ENABLED = true;
     listAllModelsMock.mockResolvedValue([...DEMO_SEMANTIC_MODELS, ADJUST_MODEL] as never);
     listDataSourcesMock.mockResolvedValue([ADJUST_SOURCE]);
     cachedRestRequestMock.mockReset();
@@ -479,6 +481,89 @@ describe("统一取数分流层（API 源自动本地缓存+API 直查，PG 源�
       model: "semantic_model_adjust_daily", from: "2026-09-03", to: "2026-09-03",
     });
     expect(result.ok).toBe(true);
+    expect(persistMock).not.toHaveBeenCalled();
+  });
+
+  it("filter：数据落地开关关闭（默认）时 Adjust 源 miss 全维度响应也不分解落库，取数不受影响", async () => {
+    envMock.ADJUST_QUERY_CACHE_ENABLED = false;
+    cachedRestRequestMock.mockResolvedValue({
+      status: 200, contentType: "text/csv",
+      body: "network,country_code,day,installs,register_events,firstdeposit_events\nweb,us,2026-09-03,100,42,7\n",
+      elapsedMs: 400, truncated: false, fromCache: false, cacheState: "miss",
+    } as never);
+    const result = await runOperator("filter", {
+      model: "semantic_model_adjust_daily", from: "2026-09-03", to: "2026-09-03",
+    });
+    expect(result.ok).toBe(true);
+    expect(result.rows[0]).toMatchObject({ network: "web", installs: 100 });
+    expect(persistMock).not.toHaveBeenCalled();
+    expect(result.notes.join(" ")).not.toContain("已分解落库");
+  });
+
+  // ─── timeseries/anomaly 统一分流（API 源指标不触达本地落库表） ─────────────
+
+  const DAILY_JSON_ROWS = [
+    { day: "2026-09-01", installs: 100 },
+    { day: "2026-09-02", installs: 150 },
+    { day: "2026-09-03", installs: 120 },
+  ];
+
+  it("timeseries：API 源指标经 API 取日序列并内存计算环比/同比，不触达本地 SQL、不落库", async () => {
+    cachedRestRequestMock.mockResolvedValue({
+      status: 200, contentType: "application/json",
+      body: { rows: DAILY_JSON_ROWS },
+      elapsedMs: 300, truncated: false, fromCache: false, cacheState: "miss",
+    } as never);
+    const result = await runOperator("timeseries", {
+      metric: "installs", granularity: "day", from: "2026-09-01", to: "2026-09-03",
+    });
+    expect(result.ok).toBe(true);
+    const [, request] = cachedRestRequestMock.mock.calls[0]!;
+    expect(request.path).toBe("report");
+    expect(request.params?.["dimensions"]).toBe("day");        // 时间维度自动用上游 slug
+    expect(request.params?.["metrics"]).toBe("installs");
+    expect(request.params?.["date_period"]).toBe("2026-09-01:2026-09-03");
+    expect(queryMock).not.toHaveBeenCalled();                  // 未走本地 adjust_daily_metrics
+    expect(persistMock).not.toHaveBeenCalled();                // 单维度日序列不触发分解落库
+    expect(result.columns).toEqual(["period", "value", "mom_pct", "yoy_pct"]);
+    expect(result.rows[0]).toEqual({ period: "2026-09-01", value: 100, mom_pct: null, yoy_pct: null });
+    expect(result.rows[1]).toEqual({ period: "2026-09-02", value: 150, mom_pct: 50, yoy_pct: null });
+    expect(result.rows[2]).toEqual({ period: "2026-09-03", value: 120, mom_pct: -20, yoy_pct: null });
+    expect(result.notes.join(" ")).toContain("API直查取日序列");
+  });
+
+  it("anomaly：API 源指标经 API 取日序列并内存 Z-Score 检测，突变日判为异常，不触达本地 SQL", async () => {
+    const rows = Array.from({ length: 30 }, (_, i) => ({
+      day: `2026-09-${String(i + 1).padStart(2, "0")}`, installs: 100,
+    }));
+    rows[29] = { day: "2026-09-30", installs: 500 };
+    cachedRestRequestMock.mockResolvedValue({
+      status: 200, contentType: "application/json", body: { rows },
+      elapsedMs: 300, truncated: false, fromCache: false, cacheState: "miss",
+    } as never);
+    const result = await runOperator("anomaly", {
+      metric: "installs", from: "2026-09-01", to: "2026-09-30",
+    });
+    expect(result.ok).toBe(true);
+    expect(queryMock).not.toHaveBeenCalled();
+    expect(result.columns).toEqual(["date", "value", "baseline", "z_score", "flag"]);
+    expect(result.rows[0]).toMatchObject({ date: "2026-09-30", value: 500, flag: "异常" });
+    expect(result.notes.join(" ")).toContain("检出 1 个异常日");
+  });
+
+  it("timeseries：路由与数据落地开关无关——开关关闭时 Adjust 指标仍经 API 直查，不查本地表、不落库", async () => {
+    envMock.ADJUST_QUERY_CACHE_ENABLED = false;
+    cachedRestRequestMock.mockResolvedValue({
+      status: 200, contentType: "application/json",
+      body: { rows: DAILY_JSON_ROWS },
+      elapsedMs: 300, truncated: false, fromCache: false, cacheState: "miss",
+    } as never);
+    const result = await runOperator("timeseries", {
+      metric: "installs", granularity: "day", from: "2026-09-01", to: "2026-09-03",
+    });
+    expect(result.ok).toBe(true);
+    expect(cachedRestRequestMock).toHaveBeenCalledTimes(1);
+    expect(queryMock).not.toHaveBeenCalled();
     expect(persistMock).not.toHaveBeenCalled();
   });
 
@@ -614,5 +699,49 @@ describe("统一取数分流层（API 源自动本地缓存+API 直查，PG 源�
     expect(result.sql).toContain("FROM data.channel_daily_metrics");
     expect(queryMock).toHaveBeenCalledTimes(1);
     expect(cachedRestRequestMock).not.toHaveBeenCalled();
+  });
+});
+
+// ─── 本地 SQL 通路开关（ASK_LOCAL_SQL_ENABLED，默认断开仅 API 取数） ─────────────
+
+describe("本地 SQL 通路开关（ASK_LOCAL_SQL_ENABLED）", () => {
+  beforeEach(() => {
+    envMock.ADJUST_QUERY_CACHE_ENABLED = true;
+    listAllModelsMock.mockResolvedValue([...DEMO_SEMANTIC_MODELS, ADJUST_MODEL] as never);
+    listDataSourcesMock.mockResolvedValue([ADJUST_SOURCE]);
+    cachedRestRequestMock.mockReset();
+    queryMock.mockReset();
+  });
+
+  it("开关关闭：PG 源指标算子拒绝本地 SQL，返回停用提示且不执行查询", async () => {
+    envMock.ASK_LOCAL_SQL_ENABLED = false;
+    const result = await runOperator("aggregate", { metric: "spend", groupBy: "ad_channel" });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("本地 SQL 查询已停用");
+    expect(queryMock).not.toHaveBeenCalled();
+  });
+
+  it("开关关闭：API 源指标仍正常直查（断开仅限本地 SQL，不影响 API）", async () => {
+    envMock.ASK_LOCAL_SQL_ENABLED = false;
+    cachedRestRequestMock.mockResolvedValue({
+      status: 200, contentType: "application/json",
+      body: { rows: [{ network: "web", installs: 100 }], totals: { installs: 100 } },
+      elapsedMs: 5, truncated: false, fromCache: false, cacheState: "miss",
+    } as never);
+    const result = await runOperator("aggregate", { metric: "installs", groupBy: "network", from: "2026-09-03", to: "2026-09-03" });
+    expect(result.ok).toBe(true);
+    expect(queryMock).not.toHaveBeenCalled();
+    expect(cachedRestRequestMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("开关开启：PG 源指标恢复本地 SQL", async () => {
+    envMock.ASK_LOCAL_SQL_ENABLED = true;
+    queryMock.mockResolvedValue({
+      columns: ["ad_channel", "spend"], rows: [{ ad_channel: "Meta", spend: 1 }],
+      rowCount: 1, elapsedMs: 5, truncated: false,
+    } as never);
+    const result = await runOperator("aggregate", { metric: "spend", groupBy: "ad_channel" });
+    expect(result.ok).toBe(true);
+    expect(queryMock).toHaveBeenCalledTimes(1);
   });
 });

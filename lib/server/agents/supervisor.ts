@@ -50,6 +50,8 @@ const WorkflowState = Annotation.Root({
   }),
   /** 最终答案（增量累积） */
   finalAnswer: Annotation<string>({ reducer: (_, b) => b, default: () => "" }),
+  /** MCP 同步消费方缓冲完整正文，Web SSE 保持即时流式。 */
+  bufferOutput: Annotation<boolean>({ reducer: (_, b) => b, default: () => false }),
 });
 
 type WorkflowStateType = typeof WorkflowState.State;
@@ -116,7 +118,11 @@ async function directAnswerNode(state: WorkflowStateType): Promise<Partial<Workf
 
   let answer = "";
   try {
-    for await (const chunk of chatCompletionStream(messages, { temperature: 0.5 })) {
+    for await (const chunk of chatCompletionStream(messages, {
+      temperature: 0.5,
+      maxTokens: 8192,
+      bufferOutput: state.bufferOutput,
+    })) {
       answer += chunk;
       ctx.sink({ type: "chunk", content: chunk });
     }
@@ -272,7 +278,7 @@ ${sections.join("\n\n")}`;
       ],
       // 多计划 × 多天的明细报告 + 缺口分析实测可超 4096 输出 token，
       // 超限会触发 response.incomplete 使整个 ask 失败（2026-11-23 联调）。
-      { temperature: 0.3, maxTokens: 8192 },
+      { temperature: 0.3, maxTokens: 8192, bufferOutput: state.bufferOutput },
     )) {
       answer += chunk;
       ctx.sink({ type: "chunk", content: chunk });
@@ -328,6 +334,8 @@ export interface RunWorkflowOptions {
   sink: (event: AgentEvent) => void;
   /** 结构化返回契约（doc/periodic.md P0）：传入后从原始查询表格抽取扁平行数组，随结果返回 */
   responseSchema?: ResponseSchemaSpec;
+  /** 仅 MCP 等同步消费方开启：完整成功后才输出正文，允许安全扩容重试。 */
+  bufferOutput?: boolean;
 }
 
 export interface WorkflowResult {
@@ -367,6 +375,7 @@ export async function runAgentWorkflow(options: RunWorkflowOptions): Promise<Wor
       researchAttempts: 0,
       critique: null,
       finalAnswer: "",
+      bufferOutput: options.bufferOutput ?? false,
     },
     { recursionLimit: 60 },
   );

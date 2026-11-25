@@ -96,6 +96,8 @@ export interface DeepResearchOptions {
   sourceContext?: string;
   /** 研究知识图谱背景（发起前图谱检索命中，见 prompts.ts graphContextBlock） */
   graphContext?: string;
+  /** 仅 MCP 等同步消费方开启：完整成功后才输出报告正文，允许安全扩容重试。 */
+  bufferOutput?: boolean;
 }
 
 // ─── 引用登记（全局去重分配编号）──────────────────────────────────────────────
@@ -632,7 +634,7 @@ export async function runDeepResearch(options: DeepResearchOptions): Promise<Dee
           content: `${sourceBlock}${graphBlock}研究问题：${question}\n研究目标：${objective}\n\n## 原始证据\n${sourceEvidenceBlock}\n\n${compareBlock}${knowledgeBlock}## 各子问题研究发现\n${evidenceBlock}\n\n## 引用来源\n${citationBlock}`,
         },
       ],
-      { temperature: 0.3, maxTokens: 8192 },
+      { temperature: 0.3, maxTokens: 8192, bufferOutput: options.bufferOutput },
     )) {
       report += chunk;
       sink({ type: "chunk", content: chunk });

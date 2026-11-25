@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { withDeadline, waitWithSignal, QueryTimeoutError, GOOGLE_QUERY_TIMEOUT_MS, API_QUERY_TIMEOUT_MS, CACHE_OPERATION_TIMEOUT_MS } from "./deadline";
 import { prisma } from "@/lib/db";
+import { env } from "@/lib/env";
 import { newId } from "@/lib/server/ids";
 import { parseGa4Request } from "./google-analytics";
 import { parseGoogleAdsRequest } from "./google-ads";
@@ -17,6 +18,10 @@ import {
  * - 命中未过期 → 直接返回（fromCache）；未命中 → 请求后写入
  * - 上游 429/5xx 先指数退避重试（优先遵循 Retry-After），仍失败且存在过期旧值 → 降级返回旧值（stale-while-error）
  * - 简单限流：同一数据源内存最小调用间隔（≥200ms），缓冲 Adjust 50 req/s 速率限制
+ *
+ * Adjust 查询缓存开关（env.ADJUST_QUERY_CACHE_ENABLED，默认关闭）：
+ * 关闭时 Adjust 官方域名源不读不写查询缓存，每次直连上游（限流与退避重试保留）；
+ * GA4 / Google Ads / 其他 REST 源不受该开关影响。
  *
  * TTL 策略适配 Adjust 数据 T+1 特性（resolveTtlSeconds，纯函数可单测）：
  * - date_period 结束日早于昨天 → 7 天（历史数据已稳定）
@@ -70,6 +75,87 @@ export function computeBackoffMs(attempt: number, retryAfterMs?: number): number
 }
 
 const lastCallAt = new Map<string, number>();
+
+/** Adjust 报告单请求超时：与 adjust-sync 的 REQUEST_TIMEOUT_MS 同口径（单日 5 维实测 ~12-24s，
+ * 通用 15s 会把慢报告 abort 成 "This operation was aborted"）；总预算仍受 withDeadline 约束 */
+const ADJUST_REQUEST_TIMEOUT_MS = 90_000;
+
+/** 判断 endpoint 是否属于 Adjust 官方域名（adjust.com 及其子域，纯函数） */
+export function isAdjustEndpoint(endpoint: string): boolean {
+  try {
+    const host = new URL(endpoint).hostname.toLowerCase();
+    return host === "adjust.com" || host.endsWith(".adjust.com");
+  } catch {
+    return false;
+  }
+}
+
+/** Adjust 报告终端（必传 date_period；/events、/filters-data 等辅助终端不需要） */
+const ADJUST_REPORT_PATHS = new Set(["csv_report", "report", "pivot_report", "parquet_report"]);
+export function isAdjustReportPath(path?: string): boolean {
+  return ADJUST_REPORT_PATHS.has((path ?? "").replace(/^\/+/, ""));
+}
+
+const ABS_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+/** Adjust 支持的逻辑日期（doc/Adjust官网API与MCP对接指南 §1.4） */
+const ADJUST_LOGICAL_PERIODS = new Set([
+  "today", "yesterday", "this_week", "last_week", "this_month", "last_month",
+  "this_quarter", "last_quarter", "this_year", "last_year",
+]);
+
+export type AdjustParamsResult =
+  | { ok: true; params: Record<string, string>; fixes: string[] }
+  | { ok: false; error: string };
+
+/**
+ * Adjust 报告终端参数纠正（纯函数）：query_api_source 自由填参时模型常混用
+ * GA4/Google Ads 日期写法（缺 date_period、斜杠区间、last_30_days）。
+ * 机械可纠正的直接纠正（fixes 留痕），不可纠正的本地拦截给提示，不发上游白耗 400。
+ */
+export function normalizeAdjustReportParams(input: Record<string, string>): AdjustParamsResult {
+  const params = { ...input };
+  const fixes: string[] = [];
+  let period = params.date_period?.trim();
+  // GA4/Google Ads 式 start/end 字段 → date_period（两侧均为合法绝对日期才合并，别名键移除）
+  if (!period) {
+    const from = params.start_date ?? params.startDate ?? params.from;
+    const to = params.end_date ?? params.endDate ?? params.to;
+    if (from && to && ABS_DATE_RE.test(from) && ABS_DATE_RE.test(to)) {
+      period = `${from}:${to}`;
+      for (const k of ["start_date", "startDate", "from", "end_date", "endDate", "to"]) delete params[k];
+      fixes.push(`start/end 字段已合并为 date_period=${period}`);
+    }
+  }
+  if (!period) {
+    return { ok: false, error: "缺少 date_period（Adjust 必填时间参数）。支持：逻辑日期（yesterday/this_month 等）、绝对区间 YYYY-MM-DD:YYYY-MM-DD（冒号分隔）、相对区间 -30d:-1d" };
+  }
+  // 斜杠分隔的绝对日期 → 冒号
+  const slash = period.match(/^(\d{4}-\d{2}-\d{2})\/(\d{4}-\d{2}-\d{2})$/);
+  if (slash) {
+    period = `${slash[1]}:${slash[2]}`;
+    fixes.push("日期分隔符 '/' 已纠正为 ':'");
+  }
+  // GA4 式 last_N_days → Adjust 相对区间（数据 T+1，截至昨日）
+  const lastN = period.match(/^last_(\d+)_days?$/i);
+  if (lastN) {
+    const n = Number(lastN[1]);
+    period = `-${n}d:-1d`;
+    fixes.push(`last_${n}_days 已纠正为 -${n}d:-1d`);
+  }
+  // 单个绝对日期 → 同日区间
+  if (ABS_DATE_RE.test(period)) {
+    fixes.push(`单日期已扩为同日区间 ${period}:${period}`);
+    period = `${period}:${period}`;
+  }
+  const valid = ADJUST_LOGICAL_PERIODS.has(period)
+    || /^\d{4}-\d{2}-\d{2}:\d{4}-\d{2}-\d{2}$/.test(period)
+    || /^-\d+[dwmy]:-\d+[dwmy]$/.test(period);
+  if (!valid) {
+    return { ok: false, error: `date_period 格式不支持："${period}"。支持：逻辑日期（yesterday/this_month 等）、YYYY-MM-DD:YYYY-MM-DD（冒号分隔）、-30d:-1d；不支持 last_30_days/30daysAgo 等 GA4 式写法` };
+  }
+  params.date_period = period;
+  return { ok: true, params, fixes };
+}
 
 /** 计算缓存键：method + endpoint + path + params（按 key 排序，保证稳定性） */
 export function computeApiCacheKey(
@@ -156,10 +242,12 @@ async function cachedRequestWithinDeadline(
     ? createHash("sha256").update(JSON.stringify({ version: "ga4-v1", sourceId: options.sourceId, action: ga4Action })).digest("hex")
     : computeApiCacheKey(input.method, config.endpoint, input.path, input.params);
   const url = resolveRequestUrl(config.endpoint, input.path, input.params);
+  // Adjust 查询缓存开关（默认关闭）：关闭时不读不写缓存，始终直连上游
+  const cacheEnabled = !isAdjustEndpoint(config.endpoint) || env.ADJUST_QUERY_CACHE_ENABLED;
 
   // 1. 查缓存（fresh 直接返回）
   let cached: { body: string; contentType: string; status: number; elapsedMs: number; expiresAt: Date } | null = null;
-  try {
+  if (cacheEnabled) try {
     const record = await withDeadline(() => prisma.apiQueryCache.findUnique({ where: { cacheKey } }), CACHE_OPERATION_TIMEOUT_MS, signal);
     signal.throwIfAborted();
     if (record) {
@@ -190,12 +278,18 @@ async function cachedRequestWithinDeadline(
   signal.throwIfAborted();
   if (!options.skipThrottle) await throttle(options.sourceId, signal);
   let result: ApiCallResult;
+  // Adjust 官方域名源放宽单请求超时（其他 REST 源维持缺省 15s）
+  const requestOpts = {
+    maxBodyBytes: options.maxBodyBytes,
+    signal,
+    timeoutMs: isAdjustEndpoint(config.endpoint) ? ADJUST_REQUEST_TIMEOUT_MS : undefined,
+  };
   try {
-    result = await executeRestRequest(config, input, { maxBodyBytes: options.maxBodyBytes, signal });
+    result = await executeRestRequest(config, input, requestOpts);
     for (let attempt = 0; attempt < MAX_RETRIES && result.retryable !== false && (result.status === 429 || result.status >= 500); attempt++) {
       await waitWithSignal(computeBackoffMs(attempt, result.retryAfterMs), signal);
       signal.throwIfAborted();
-      result = await executeRestRequest(config, input, { maxBodyBytes: options.maxBodyBytes, signal });
+      result = await executeRestRequest(config, input, requestOpts);
     }
   } catch (error) {
     signal.throwIfAborted();
@@ -221,7 +315,7 @@ async function cachedRequestWithinDeadline(
   }
 
   // 4. 成功响应（2xx）写入缓存；body 以原始文本存储
-  if (result.status >= 200 && result.status < 300 && !result.truncated) {
+  if (cacheEnabled && result.status >= 200 && result.status < 300 && !result.truncated) {
     const ttl = options.ttlSeconds ?? (adsAction ? (adsAction.action === "report" ? 300 : 30) : ga4Action ? 300 : resolveTtlSeconds(input.params));
     const rawBody = typeof result.body === "string" ? result.body : JSON.stringify(result.body);
     try {

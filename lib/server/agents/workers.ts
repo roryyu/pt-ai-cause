@@ -2,6 +2,7 @@ import { createReactAgent } from "@langchain/langgraph/prebuilt";
 import type { AIMessageChunk } from "@langchain/core/messages";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { getChatModel } from "@/lib/server/model-gateway";
+import { env } from "@/lib/env";
 import { listDataSources, type ResolvedDataSource } from "@/lib/server/connectors/datasources";
 import {
   createRunOperatorTool, createSqlQueryTool, createInspectSchemaTool, createShowTableTool, createGenerateChartTool,
@@ -67,11 +68,14 @@ export async function runDataAnalystWorker(ctx: AgentRunContext): Promise<string
 
   const tools: StructuredToolInterface[] = [
     createRunOperatorTool(ctx, operatorDescription),
-    createSqlQueryTool(ctx),
-    createInspectSchemaTool(ctx),
     createShowTableTool(ctx),
     createGenerateChartTool(ctx),
   ];
+  // 本地 SQL 通路开关（ASK_LOCAL_SQL_ENABLED）：关闭时不装配 sql_query/inspect_schema，
+  // 算子本地 SQL 路径亦被护栏拒绝，/ask 仅经 API 数据源取数；本地同步数据恢复后再置 true 恢复
+  if (env.ASK_LOCAL_SQL_ENABLED) {
+    tools.push(createSqlQueryTool(ctx), createInspectSchemaTool(ctx));
+  }
   if (apiSources.length > 0) tools.push(createApiSourceTool(ctx, apiSources));
 
   const externalBlock = externalSources.length > 0
@@ -81,7 +85,7 @@ export async function runDataAnalystWorker(ctx: AgentRunContext): Promise<string
   const agent = createReactAgent({
     llm,
     tools,
-    prompt: buildDataAnalystPrompt(tablesHint) + externalBlock,
+    prompt: buildDataAnalystPrompt(tablesHint, env.ASK_LOCAL_SQL_ENABLED) + externalBlock,
   });
 
   const messages: Array<{ role: "user"; content: string }> = [

@@ -4,6 +4,7 @@ import { chatCompletionStream, chatCompletion, getChatModel, withModelRequestSig
 beforeEach(() => vi.restoreAllMocks());
 const frame = (event: unknown) => `data: ${JSON.stringify(event)}\r\n\r\n`;
 const completed = frame({ type: "response.completed", response: { status: "completed" } });
+const tokenLimited = frame({ type: "response.incomplete", response: { incomplete_details: { reason: "max_output_tokens" } } });
 const response = (data: string | ReadableStream) => new Response(data, { headers: { "content-type": "text/event-stream" } });
 it("yields each native text delta before completion, across UTF-8 and CRLF boundaries", async () => {
   let output!: ReadableStreamDefaultController<Uint8Array>;
@@ -24,12 +25,13 @@ it("yields each native text delta before completion, across UTF-8 and CRLF bound
   expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({ model: "openai/gpt-5.6-sol", input: [{ role: "system", content: "Guide" }, { role: "user", content: "test" }], reasoning: { effort: "low" }, max_output_tokens: 4096, stream: true, store: false });
   expect(fetcher).toHaveBeenCalledTimes(1);
 });
-it.each(["response.failed", "response.incomplete", "error", "missing-terminal"])("does not retry %s after partial output", async type => {
-  const tail = type === "missing-terminal" ? "" : frame({ type, error: { code: "denied" } });
+it.each(["response.failed", "response.incomplete", "error", "missing-terminal", "max_output_tokens"])("does not retry %s after partial output", async type => {
+  const tail = type === "missing-terminal" ? "" : type === "max_output_tokens" ? tokenLimited : frame({ type, error: { code: "denied" } });
   const fetcher = vi.spyOn(globalThis, "fetch").mockResolvedValue(response(frame({ type: "response.output_text.delta", delta: "partial" }) + tail));
   const generator = chatCompletionStream([{ role: "user", content: "test" }]);
   expect((await generator.next()).value).toBe("partial");
-  await expect(generator.next()).rejects.toThrow(type === "missing-terminal" ? "terminal" : "denied");
+  const reason = type === "missing-terminal" ? "terminal" : type === "max_output_tokens" ? "max_output_tokens" : "denied";
+  await expect(generator.next()).rejects.toThrow(reason);
   expect(fetcher).toHaveBeenCalledTimes(1);
 });
 it("uses low effort and no unsupported sampling in unary and LangChain tool calls", async () => {
@@ -50,4 +52,31 @@ it("propagates cancellation to Foundation without starting a retry", async () =>
     for await (const delta of chatCompletionStream([{ role: "user", content: "test" }])) void delta;
   })).rejects.toThrow();
   expect(fetcher).toHaveBeenCalledTimes(1);
+});
+it("does not start a buffered retry after cancellation", async () => {
+  const controller = new AbortController();
+  const fetcher = vi.spyOn(globalThis, "fetch").mockImplementationOnce(async () => {
+    controller.abort();
+    return response(tokenLimited);
+  });
+  await expect(withModelRequestSignal(controller.signal, async () => {
+    for await (const delta of chatCompletionStream([{ role: "user", content: "test" }], { bufferOutput: true })) void delta;
+  })).rejects.toThrow();
+  expect(fetcher).toHaveBeenCalledTimes(1);
+});
+it("buffers a token-limited attempt and retries with a larger output budget", async () => {
+  const fetcher = vi.spyOn(globalThis, "fetch")
+    .mockResolvedValueOnce(response(frame({ type: "response.output_text.delta", delta: "discarded" }) + tokenLimited))
+    .mockResolvedValueOnce(response(frame({ type: "response.output_text.delta", delta: "complete" }) + completed));
+  const chunks: string[] = [];
+  for await (const chunk of chatCompletionStream([{ role: "user", content: "test" }], { maxTokens: 4096, bufferOutput: true })) chunks.push(chunk);
+  expect(chunks).toEqual(["complete"]);
+  expect(fetcher.mock.calls.map(([, init]) => JSON.parse(String(init?.body)).max_output_tokens)).toEqual([4096, 8192]);
+});
+it("stops buffered token-limit retries at the output budget ceiling", async () => {
+  const fetcher = vi.spyOn(globalThis, "fetch").mockImplementation(async () => response(tokenLimited));
+  await expect((async () => {
+    for await (const delta of chatCompletionStream([{ role: "user", content: "test" }], { maxTokens: 8192, bufferOutput: true })) void delta;
+  })()).rejects.toThrow("Foundation generation failed (max_output_tokens)");
+  expect(fetcher.mock.calls.map(([, init]) => JSON.parse(String(init?.body)).max_output_tokens)).toEqual([8192, 16384, 32768]);
 });

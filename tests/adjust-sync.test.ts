@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
 // 隔离 DB 与环境变量依赖（与 operators.test.ts 同模式）
-vi.mock("@/lib/env", () => ({
-  env: {
-    DATABASE_URL: "postgresql://localhost:5432/test?schema=cause",
-    ADJUST_RS_API_BASE_URL: "https://automate.adjust.com/reports-service",
-  },
+const envMock = vi.hoisted(() => ({
+  DATABASE_URL: "postgresql://localhost:5432/test?schema=cause",
+  ADJUST_RS_API_BASE_URL: "https://automate.adjust.com/reports-service",
+  ADJUST_QUERY_CACHE_ENABLED: false,
 }));
+vi.mock("@/lib/env", () => ({ env: envMock }));
 vi.mock("@/lib/db", () => ({ prisma: {} }));
 
 import {
@@ -17,7 +17,26 @@ import {
   buildDayChunks,
   buildDateRangeChunks,
   parseEventIds,
+  runAdjustSync,
+  AdjustSyncConfigError,
 } from "@/lib/server/integrations/adjust-sync";
+
+// ─── 数据落地开关（ADJUST_QUERY_CACHE_ENABLED，与查询缓存/分解落库共用，默认关闭） ───
+
+describe("runAdjustSync 数据落地开关", () => {
+  it("关闭（默认）：直接返回 skipped，不请求上游、不写库（无 token 也不报配置错误）", async () => {
+    envMock.ADJUST_QUERY_CACHE_ENABLED = false;
+    const result = await runAdjustSync({ days: 3 });
+    expect(result).toMatchObject({ ok: true, upserted: 0, chunks: 0, failedDays: [] });
+    expect(result.skipped).toContain("ADJUST_QUERY_CACHE_ENABLED=false");
+  });
+
+  it("开启后恢复原行为：缺 token 仍报 AdjustSyncConfigError", async () => {
+    envMock.ADJUST_QUERY_CACHE_ENABLED = true;
+    await expect(runAdjustSync({})).rejects.toThrow(AdjustSyncConfigError);
+    envMock.ADJUST_QUERY_CACHE_ENABLED = false;
+  });
+});
 
 // ─── parseEventIds：/events 终端响应解析（事件 slug 动态校验） ───────────────
 

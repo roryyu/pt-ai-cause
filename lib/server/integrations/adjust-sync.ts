@@ -20,6 +20,8 @@
  *
  * 依赖 .env：ADJUST_API_TOKEN（必填）、DATABASE_URL、
  *           ADJUST_RS_API_BASE_URL（可选）、ADJUST_RS_UTC_OFFSET（可选，缺省 +08:00）
+ * 开关：ADJUST_QUERY_CACHE_ENABLED（与查询缓存/分解落库共用，默认关闭）——
+ *       关闭时 runAdjustSync 直接返回 skipped，不请求上游、不写库（CLI/API/初始化脚本同口径）
  * 幂等：重复执行为 upsert / 先删后插，可安全重跑；单日失败不阻断整批回补（记 warning 续跑）。
  */
 import { prisma } from "@/lib/db";
@@ -335,6 +337,15 @@ async function upsertRecords(records: Record<string, unknown>[]): Promise<number
 
 export async function runAdjustSync(options: AdjustSyncOptions = {}): Promise<AdjustSyncResult> {
   const log = options.onLog ?? (() => undefined);
+  // Adjust 数据落地开关（与查询缓存/分解落库共用，默认关闭）：关闭时跳过同步，不请求上游、不写库
+  if (!env.ADJUST_QUERY_CACHE_ENABLED) {
+    const skipped = "Adjust 数据落地开关已关闭（ADJUST_QUERY_CACHE_ENABLED=false），本次跳过同步";
+    log(`⏭️ ${skipped}`);
+    return {
+      ok: true, datePeriod: "", utcOffset: options.utcOffset ?? env.ADJUST_RS_UTC_OFFSET ?? DEFAULT_UTC_OFFSET,
+      upserted: 0, chunks: 0, failedDays: [], skipped, warnings: [],
+    };
+  }
   const token = env.ADJUST_API_TOKEN;
   if (!token) {
     throw new AdjustSyncConfigError("缺少 ADJUST_API_TOKEN，请在 .env 中配置（Adjust 控制面板 → 账户设置 → 个人档案）");

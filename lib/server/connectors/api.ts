@@ -84,9 +84,10 @@ async function fetchWithLimits(
   url: string,
   init: RequestInit,
   maxBodyBytes: number = MAX_BODY_BYTES,
+  timeoutMs: number = TIMEOUT_MS,
 ): Promise<{ status: number; contentType: string; body: string; truncated: boolean; retryAfterMs?: number }> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(url, { ...init, signal: init.signal ? AbortSignal.any([controller.signal, init.signal]) : controller.signal });
     // 本函数刻意返回所有响应（含 4xx/5xx），由调用方按 status 决策：
@@ -273,11 +274,12 @@ export function parseBody(raw: string, contentType: string): unknown {
 }
 
 /** 执行 REST 请求（仅 GET/POST）；maxBodyBytes 可放宽响应体截断限制（缺省 200KB，
- * 供算子落库扩维取数等大明细场景使用，见 data-operators 的 EXPANDED_MAX_BODY_BYTES） */
+ * 供算子落库扩维取数等大明细场景使用，见 data-operators 的 EXPANDED_MAX_BODY_BYTES）；
+ * timeoutMs 可放宽单请求超时（缺省 15s；Adjust 报告单日 5 维实测 ~12-24s，需更长预算） */
 export async function executeRestRequest(
   config: ApiSourceConfig,
   input: RestRequestInput,
-  opts?: { maxBodyBytes?: number; signal?: AbortSignal },
+  opts?: { maxBodyBytes?: number; signal?: AbortSignal; timeoutMs?: number },
 ): Promise<ApiCallResult> {
   opts?.signal?.throwIfAborted();
   if (config.protocol === "google_ads") return executeGoogleAdsRequest(config, input, opts?.signal);
@@ -298,7 +300,7 @@ export async function executeRestRequest(
     },
     body: input.method === "POST" && input.body !== undefined ? JSON.stringify(input.body) : undefined,
     signal: opts?.signal,
-  }, opts?.maxBodyBytes);
+  }, opts?.maxBodyBytes, opts?.timeoutMs);
   return {
     status: result.status,
     contentType: result.contentType,

@@ -71,6 +71,10 @@ export const serverEnvSchema = z.object({
   ADJUST_RS_API_BASE_URL: z.string().url().default("https://automate.adjust.com/reports-service"),
   /** 报告时区（如 +08:00）：同步落库与算子 API 直查统一口径，避免跨日错位 */
   ADJUST_RS_UTC_OFFSET: z.string().regex(/^[+-]\d{2}:\d{2}$/, "格式如 +08:00").optional(),
+  /** Adjust 查询缓存与数据落地开关（查询缓存读写 / 查询后分解落库 / 定时同步共用）：默认关闭，Adjust 直查不读不写缓存、不落库、不同步 */
+  ADJUST_QUERY_CACHE_ENABLED: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
+  /** /ask 本地 SQL 通路开关：默认 false（断开）——不装配 sql_query/inspect_schema 工具，算子本地 SQL 路径拒绝执行，仅经 API 数据源取数；本地同步数据恢复后如需本地分析再置 true */
+  ASK_LOCAL_SQL_ENABLED: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
 });
 
 /** 服务端环境变量类型（从 Schema 推断） */
