@@ -306,3 +306,30 @@ describe("MCP 协议装配 createCauseMcpServer", () => {
     expect(received).toHaveLength(0);
   });
 });
+describe("MCP 已核对的日趋势", () => {
+  const rows = [{ day: "2026-11-18", conversions: 28 }, { day: "2026-11-19", conversions: 16 }];
+  const chart = { type: "bar", title: "广告转化", xKey: "day", yKeys: ["conversions"], data: rows };
+  const table = { title: "查询结果", columns: ["day", "conversions"], rows };
+
+  it("按需从同一次查询表格核对并返回日图", async () => {
+    mocks.runAgentWorkflow.mockResolvedValue({
+      ...WORKFLOW_RESULT, dataFindings: { charts: [chart], tables: [table], sql: [] },
+    });
+    expect(await runAskTask({ question: "广告转化趋势" }, ACTOR)).not.toHaveProperty("dailyChart");
+    expect(await runAskTask({ question: "广告转化趋势", includeDailyChart: true }, ACTOR))
+      .toHaveProperty("dailyChart", {
+        title: "广告转化", labels: ["conversions"],
+        days: [{ date: "2026-11-18", values: [28] }, { date: "2026-11-19", values: [16] }],
+      });
+  });
+
+  it("图表与查询证据矛盾时继续返回正文", async () => {
+    mocks.runAgentWorkflow.mockResolvedValue({
+      ...WORKFLOW_RESULT,
+      dataFindings: { charts: [{ ...chart, data: [rows[0], { ...rows[1], conversions: 99 }] }], tables: [table], sql: [] },
+    });
+    const result = await runAskTask({ question: "广告转化趋势", includeDailyChart: true }, ACTOR);
+    expect(result.answer).toBe(WORKFLOW_RESULT.finalAnswer);
+    expect(result.dailyChart).toBeUndefined();
+  });
+});
