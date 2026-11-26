@@ -39,10 +39,11 @@ const DEFAULT_STREAM_MAX_TOKENS_LIMIT = 32768;
 
 // Foundation 的 Claude 别名（含 Bedrock 路由）只支持 Anthropic Messages 协议
 function isAnthropicModel(model: string) { return /claude|anthropic/i.test(model); }
-// Anthropic 路由挂在网关 origin 下（如 https://host/anthropic），与 OpenAI 基址的路径前缀无关；
+// Anthropic 路由与 OpenAI 基址同前缀，仅末段 v1 换为 anthropic
+//（如 https://host/api/gateway/v1 → https://host/api/gateway/anthropic）；
 // SDK 会自行拼接 /v1/messages，裸 fetch 调用点需自行补全
 function anthropicBaseURL() {
-  return `${new URL(env.MODEL_GATEWAY_BASE_URL).origin}/anthropic`;
+  return `${env.MODEL_GATEWAY_BASE_URL.replace(/\/$/, "").replace(/\/v1$/, "")}/anthropic`;
 }
 function anthropicHeaders(): Record<string, string> {
   return {

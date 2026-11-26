@@ -91,7 +91,7 @@ it("routes Claude unary calls to Anthropic messages without reasoning params", a
   mockEnv.MODEL_GATEWAY_DEFAULT_MODEL = CLAUDE;
   const fetcher = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ content: [{ type: "text", text: "answer" }] }), { headers: { "content-type": "application/json" } }));
   expect(await chatCompletion([{ role: "system", content: "Guide" }, { role: "user", content: "test" }], { temperature: 0 })).toBe("answer");
-  expect(String(fetcher.mock.calls[0]?.[0])).toBe("https://foundation.test/anthropic/v1/messages");
+  expect(String(fetcher.mock.calls[0]?.[0])).toBe("https://foundation.test/openai/anthropic/v1/messages");
   const body = JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body));
   expect(body).toEqual({ model: CLAUDE, system: "Guide", messages: [{ role: "user", content: "test" }], max_tokens: 4096, temperature: 0 });
 });
@@ -101,7 +101,7 @@ it("streams Claude text deltas from Anthropic SSE until message_stop", async () 
   const chunks: string[] = [];
   for await (const chunk of chatCompletionStream([{ role: "system", content: "Guide" }, { role: "user", content: "test" }])) chunks.push(chunk);
   expect(chunks).toEqual(["你好", "，世界"]);
-  expect(String(fetcher.mock.calls[0]?.[0])).toBe("https://foundation.test/anthropic/v1/messages");
+  expect(String(fetcher.mock.calls[0]?.[0])).toBe("https://foundation.test/openai/anthropic/v1/messages");
   expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({ model: CLAUDE, system: "Guide", messages: [{ role: "user", content: "test" }], max_tokens: 4096, stream: true });
 });
 it("retries Claude token-limited buffered output with a larger max_tokens", async () => {
@@ -128,10 +128,10 @@ it("uses ChatAnthropic for Claude tool calls", () => {
   expect(params.model).toBe(CLAUDE);
   expect("reasoning" in params).toBe(false);
 });
-it("derives the Anthropic route from the gateway origin regardless of OpenAI path prefix", async () => {
+it("derives the Anthropic route by swapping the trailing v1 segment of the gateway base", async () => {
   mockEnv.MODEL_GATEWAY_DEFAULT_MODEL = CLAUDE;
   mockEnv.MODEL_GATEWAY_BASE_URL = "https://ai-foundation.pmdevops.com/api/gateway/v1";
   const fetcher = vi.spyOn(globalThis, "fetch").mockResolvedValue(response(anthropicDelta("ok") + anthropicStop));
   for await (const delta of chatCompletionStream([{ role: "user", content: "test" }])) void delta;
-  expect(String(fetcher.mock.calls[0]?.[0])).toBe("https://ai-foundation.pmdevops.com/anthropic/v1/messages");
+  expect(String(fetcher.mock.calls[0]?.[0])).toBe("https://ai-foundation.pmdevops.com/api/gateway/anthropic/v1/messages");
 });
