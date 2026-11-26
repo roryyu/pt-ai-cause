@@ -2,7 +2,7 @@ import { beforeEach, it, expect, vi } from "vitest";
 const mockEnv = vi.hoisted(() => ({ MODEL_GATEWAY_BASE_URL: "https://foundation.test/openai/v1", MODEL_GATEWAY_API_KEY: "isolated-agent-fixture", MODEL_GATEWAY_DEFAULT_MODEL: "openai/gpt-5.6-sol", MODEL_GATEWAY_TIMEOUT_MS: 1000 }));
 vi.mock("@/lib/env", () => ({ env: mockEnv }));
 import { chatCompletionStream, chatCompletion, getChatModel, withModelRequestSignal } from "@/lib/server/model-gateway";
-beforeEach(() => { vi.restoreAllMocks(); mockEnv.MODEL_GATEWAY_DEFAULT_MODEL = "openai/gpt-5.6-sol"; });
+beforeEach(() => { vi.restoreAllMocks(); mockEnv.MODEL_GATEWAY_DEFAULT_MODEL = "openai/gpt-5.6-sol"; mockEnv.MODEL_GATEWAY_BASE_URL = "https://foundation.test/openai/v1"; });
 const frame = (event: unknown) => `data: ${JSON.stringify(event)}\r\n\r\n`;
 const completed = frame({ type: "response.completed", response: { status: "completed" } });
 const tokenLimited = frame({ type: "response.incomplete", response: { incomplete_details: { reason: "max_output_tokens" } } });
@@ -127,4 +127,11 @@ it("uses ChatAnthropic for Claude tool calls", () => {
   const params = getChatModel({ temperature: 0 }).invocationParams({});
   expect(params.model).toBe(CLAUDE);
   expect("reasoning" in params).toBe(false);
+});
+it("derives the Anthropic route from the gateway origin regardless of OpenAI path prefix", async () => {
+  mockEnv.MODEL_GATEWAY_DEFAULT_MODEL = CLAUDE;
+  mockEnv.MODEL_GATEWAY_BASE_URL = "https://ai-foundation.pmdevops.com/api/gateway/v1";
+  const fetcher = vi.spyOn(globalThis, "fetch").mockResolvedValue(response(anthropicDelta("ok") + anthropicStop));
+  for await (const delta of chatCompletionStream([{ role: "user", content: "test" }])) void delta;
+  expect(String(fetcher.mock.calls[0]?.[0])).toBe("https://ai-foundation.pmdevops.com/anthropic/v1/messages");
 });

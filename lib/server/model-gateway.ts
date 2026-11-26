@@ -39,8 +39,10 @@ const DEFAULT_STREAM_MAX_TOKENS_LIMIT = 32768;
 
 // Foundation 的 Claude 别名（含 Bedrock 路由）只支持 Anthropic Messages 协议
 function isAnthropicModel(model: string) { return /claude|anthropic/i.test(model); }
+// Anthropic 路由挂在网关 origin 下（如 https://host/anthropic），与 OpenAI 基址的路径前缀无关；
+// SDK 会自行拼接 /v1/messages，裸 fetch 调用点需自行补全
 function anthropicBaseURL() {
-  return `${env.MODEL_GATEWAY_BASE_URL.replace(/\/$/, "").replace(/\/openai\/v1$/, "")}/anthropic`;
+  return `${new URL(env.MODEL_GATEWAY_BASE_URL).origin}/anthropic`;
 }
 function anthropicHeaders(): Record<string, string> {
   return {
@@ -65,7 +67,7 @@ class FoundationOutputTokenLimitError extends Error {
 export async function chatCompletion(messages: OpenAI.ChatCompletionMessageParam[], options?: Options): Promise<string> {
   const model = options?.model ?? getDefaultModel();
   if (isAnthropicModel(model)) {
-    const response = await gatewayFetch(`${anthropicBaseURL()}/messages`, {
+    const response = await gatewayFetch(`${anthropicBaseURL()}/v1/messages`, {
       method: "POST", headers: anthropicHeaders(),
       body: JSON.stringify({ model, ...toAnthropicMessages(messages as Array<{ role: string; content: string }>),
         max_tokens: options?.maxTokens ?? DEFAULT_MAX_TOKENS, ...(options?.temperature !== undefined ? { temperature: options.temperature } : {}) }),
@@ -88,7 +90,7 @@ async function* streamOnce(
   const model = options?.model ?? getDefaultModel();
   const anthropic = isAnthropicModel(model);
   const base = env.MODEL_GATEWAY_BASE_URL.replace(/\/$/, "");
-  const response = await gatewayFetch(anthropic ? `${anthropicBaseURL()}/messages` : `${base}/responses`, {
+  const response = await gatewayFetch(anthropic ? `${anthropicBaseURL()}/v1/messages` : `${base}/responses`, {
     method: "POST", headers: anthropic ? { ...anthropicHeaders(), accept: "text/event-stream" } : { authorization: `Bearer ${env.MODEL_GATEWAY_API_KEY}`, "content-type": "application/json", accept: "text/event-stream" },
     body: JSON.stringify(anthropic
       ? { model, ...toAnthropicMessages(input), max_tokens: maxTokens, stream: true }
