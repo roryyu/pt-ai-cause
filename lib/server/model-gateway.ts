@@ -40,7 +40,7 @@ const DEFAULT_STREAM_MAX_TOKENS_LIMIT = 32768;
 // Foundation 的 Claude 别名（含 Bedrock 路由）只支持 Anthropic Messages 协议
 function isAnthropicModel(model: string) { return /claude|anthropic/i.test(model); }
 function anthropicBaseURL() {
-  return `${env.MODEL_GATEWAY_BASE_URL.replace(/\/$/, "").replace(/\/openai\/v1$/, "")}/anthropic/v1`;
+  return `${env.MODEL_GATEWAY_BASE_URL.replace(/\/$/, "").replace(/\/openai\/v1$/, "")}/anthropic`;
 }
 function anthropicHeaders(): Record<string, string> {
   return {
