@@ -89,10 +89,10 @@ export default async function LoginPage({
         {/* Logo */}
         <div className="mb-8 text-center">
           <div
-            className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl"
-            style={{ background: "var(--purple)", color: "#fff" }}
+            className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl border"
+            style={{ background: "var(--surface)", borderColor: "var(--line)" }}
           >
-            <LogoIcon size={34} />
+            <LogoIcon size={44} />
           </div>
           <h1 className="mt-4 text-2xl font-semibold tracking-tight" style={{ color: "var(--ink)" }}>
             归因模块

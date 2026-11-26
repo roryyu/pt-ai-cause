@@ -54,9 +54,9 @@ export function Sidebar() {
       <div className="flex h-16 items-center gap-3 px-4">
         <div
           className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
-          style={{ background: "var(--purple)", color: "#fff" }}
+          style={{ background: "var(--surface)" }}
         >
-          <LogoIcon size={22} />
+          <LogoIcon size={28} />
         </div>
         {!collapsed && (
           <span className="text-sm font-semibold tracking-tight">归因模块</span>
