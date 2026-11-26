@@ -104,7 +104,7 @@ export const GOOGLE_ADS_QUERY_GUIDE = `Google Ads 广告投放数据使用 query
 - path="report", body={"campaignId":"123","startDate":"2026-11-01","endDate":"2026-11-07","installAction":"customers/1234567890/conversionActions/456"}；单次最多366天，返回每日曝光、点击、ctr、cost、installs、cpi。installAction 可省略，此时 installs/cpi 是 null（未配置，不是0）。指标以账户时区、币种为准，安装使用指定动作 all_conversions，按广告互动日期归因，不等同商店下载数，也不能等同 Adjust 安装。
 - ctr 为比例；CPI=花费/安装，零安装为 null。区间 CTR/CPI 必须先分别累计分子分母再相除，不能平均每日比率。truncated=true 时按 nextStartDate 继续 report（原 endDate 不变），未取完不能算完整总量。
 - ${API_FAILURE_CONTINUE_HINT} ${API_EMPTY_CONTINUE_HINT}
-- 全源覆盖：问题涉及投放效果指标时，本地/Adjust/GA4 取数后仍须查 Google Ads，各源分别取数、最后分源汇总（用户明确限定单一来源时除外）；查完 Adjust 再查 Google 投放数据时按顺序取数，分别标来源。权限错误请展示 codes/help 的真实开通入口，不用空数据冒充成功；账户发现成功不代表报表权限已通过。fromCache 表示短缓存，不声称实时。`;
+- 全源覆盖：问题涉及投放效果指标时，本地/Adjust/GA4 取数后仍须查 Google Ads，各源分别取数、最后分源汇总（用户明确限定单一来源时除外）；查完 Adjust 再查 Google 投放数据时按顺序取数，分别标来源。权限错误请展示 codes/help 的真实开通入口，不用空数据冒充成功；账户发现成功不代表报表权限已通过。fromCache 表示 24 小时内的缓存结果（条件完全一致即复用），不声称实时。`;
 
 /** Adjust RS API 仅 GET + query 参数；POST/body 必 405（曾误套 GA4/Google Ads 的 POST JSON 模板） */
 export const ADJUST_QUERY_GUIDE = `Adjust 报告服务（RS API）为 REST 源，只支持 method="GET" + params 查询参数；传 POST 或 body 会被上游 405 拒绝，不要套用 GA4/Google Ads 的 JSON body 模板。
