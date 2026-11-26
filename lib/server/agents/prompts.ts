@@ -24,6 +24,29 @@
 export const PLATFORM_CONTEXT =
   "本平台是流量投放效果归因平台，聚焦广告投放渠道（如 Meta / X / TikTok）、承接端（app / web）、投放市场与全漏斗指标（花费 / 展示 / 点击 / 下载 / 注册 / FD 首次充钱 / RD 召回充钱 / CPI / ROI / CTR）";
 
+// ─── 当前时间上下文（ask 工作流各 Agent 注入） ────────────────────────────────
+
+/** 业务时区：与 Adjust utc_offset="+08:00"、GA4 属性时区的数据口径一致 */
+const BUSINESS_TIME_ZONE = "Asia/Shanghai";
+
+/**
+ * 当前时间上下文块：程序主动取当前时间注入系统提示词，让模型能把「今天 / 昨天 /
+ * 近一周 / 近 30 天 / 本月 / 今年以来」等相对时间换算成具体日期区间。
+ * 按业务时区（Asia/Shanghai）计算，不受服务器/容器系统时区影响；纯函数，便于测试。
+ */
+export function currentTimeContextBlock(now: Date = new Date()): string {
+  const parts = new Intl.DateTimeFormat("zh-CN", {
+    timeZone: BUSINESS_TIME_ZONE,
+    year: "numeric", month: "2-digit", day: "2-digit",
+    weekday: "long", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  }).formatToParts(now);
+  const get = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value ?? "";
+  const dateTime = `${get("year")}-${get("month")}-${get("day")} ${get("hour")}:${get("minute")}`;
+  return `## 当前时间（系统注入，判断「现在」的唯一依据）
+当前时间：${dateTime}（${get("weekday")}，时区 Asia/Shanghai，UTC+08:00）。
+用户问题与对话历史中的相对时间（今天、昨天、本周、上周、近一周、近 30 天、本月、今年以来、最新等）一律以本时间为基准换算成具体日期区间，再取数、检索与作答，并在结论中写明实际使用的区间；禁止凭训练知识猜测当前日期。外部数据普遍 T+1，「今天」的数据可能不完整，需如实说明。`;
+}
+
 // ─── 任务问答工作流（supervisor.ts） ─────────────────────────────────────────
 
 /** Supervisor 意图路由：三分类（data_analysis / research / direct） */
