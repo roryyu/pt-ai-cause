@@ -98,7 +98,7 @@ export function AddToCanvasDialog({
       setSelectedId("");
       setUnchecked(new Set());
       setLoading(true);
-      apiFetch("/api/v1/insights?page=1&pageSize=20")
+      apiFetch<{ docs: InsightDocItem[] }>("/api/v1/insights?page=1&pageSize=20")
         .then((json) => {
           if (cancelled) return;
           if (json.ok) setDocs(json.data.docs ?? []);
@@ -151,7 +151,7 @@ export function AddToCanvasDialog({
     setCreating(true);
     setError("");
     try {
-      const json = await apiFetch("/api/v1/insights", {
+      const json = await apiFetch<Pick<InsightDocItem, "id">>("/api/v1/insights", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ title, kind: "report" }),

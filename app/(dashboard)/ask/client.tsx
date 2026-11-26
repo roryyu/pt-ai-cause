@@ -71,6 +71,11 @@ interface PersistedAnswer {
   error?: string;
 }
 
+interface HistoryQuestion extends Pick<HistoryItem, "id" | "content" | "status"> {
+  answer: PersistedAnswer | null;
+  thread?: Array<{ id: string; content: string; route: string | null; answerContent: string }>;
+}
+
 export function AskClient({ initialQuestionId }: { initialQuestionId?: string }) {
   const router = useRouter();
   const [history, setHistory] = useState<HistoryItem[]>([]);
@@ -97,7 +102,7 @@ export function AskClient({ initialQuestionId }: { initialQuestionId?: string })
 
   const loadHistory = useCallback(async () => {
     try {
-      const json = await apiFetch("/api/v1/ask");
+      const json = await apiFetch<{ questions: HistoryItem[] }>("/api/v1/ask");
       if (json.ok) setHistory(json.data.questions ?? []);
     } catch {
       // 静默失败
@@ -219,14 +224,14 @@ export function AskClient({ initialQuestionId }: { initialQuestionId?: string })
   const viewQuestion = useCallback(async (id: string) => {
     try {
       stop();
-      const json = await apiFetch(`/api/v1/ask/${id}`);
+      const json = await apiFetch<HistoryQuestion>(`/api/v1/ask/${id}`);
       if (!json.ok) return;
       const q = json.data;
       setCurrentQuestionId(q.id);
       setCurrentQuestion(q.content);
       // 会话线程：从服务端返回的祖先问答链渲染（早到晚）
       setThread(
-        ((q.thread ?? []) as Array<{ id: string; content: string; route: string | null; answerContent: string }>).map((t) => ({
+        (q.thread ?? []).map((t) => ({
           id: t.id,
           question: t.content,
           answerContent: t.answerContent,
@@ -235,7 +240,7 @@ export function AskClient({ initialQuestionId }: { initialQuestionId?: string })
       );
       setViewing({
         question: q.content,
-        answer: (q.answer ?? {}) as PersistedAnswer,
+        answer: q.answer ?? {},
         status: q.status,
       });
     } catch {

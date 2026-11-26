@@ -130,7 +130,7 @@ export function ResearchClient({ initialSourceQuestionId }: { initialSourceQuest
 
   const loadTasks = useCallback(async () => {
     try {
-      const json = await apiFetch("/api/v1/research?page=1&pageSize=50");
+      const json = await apiFetch<{ tasks: TaskListItem[] }>("/api/v1/research?page=1&pageSize=50");
       if (json.ok) setTasks(json.data.tasks ?? []);
     } finally {
       setLoadingList(false);
@@ -147,10 +147,13 @@ export function ResearchClient({ initialSourceQuestionId }: { initialSourceQuest
     let cancelled = false;
     Promise.resolve().then(async () => {
       try {
-        const json = await apiFetch(`/api/v1/ask/${initialSourceQuestionId}`);
+        const json = await apiFetch<Pick<SourceQuestion, "id" | "content"> & {
+          status: string;
+          answer?: { content?: string } | null;
+        }>(`/api/v1/ask/${initialSourceQuestionId}`);
         if (cancelled) return;
         if (json.ok && json.data?.status === "completed") {
-          const answer = (json.data.answer ?? {}) as { content?: string };
+          const answer = json.data.answer ?? {};
           setSourceQuestion({
             id: json.data.id,
             content: json.data.content,
@@ -203,7 +206,7 @@ export function ResearchClient({ initialSourceQuestionId }: { initialSourceQuest
     setDetail(null);
     setLoadingDetail(true);
     try {
-      const json = await apiFetch(`/api/v1/research/${taskId}`);
+      const json = await apiFetch<TaskDetail>(`/api/v1/research/${taskId}`);
       if (json.ok) setDetail(json.data);
     } finally {
       setLoadingDetail(false);

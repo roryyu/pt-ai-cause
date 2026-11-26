@@ -24,12 +24,12 @@ export interface ApiErrorBody {
 }
 
 /** 统一响应信封：成功携带 data，失败携带 error */
-export type ApiEnvelope<T = any> =
+export type ApiEnvelope<T = unknown> =
   | { ok: true; data: T; error?: undefined }
   | { ok: false; error: ApiErrorBody; data?: undefined };
 
 /** 由 HTTP 状态码合成一个错误信封（服务端未返回标准错误体时使用） */
-function httpErrorEnvelope(status: number): ApiEnvelope {
+function httpErrorEnvelope(status: number): ApiEnvelope<never> {
   return {
     ok: false,
     error: {
@@ -57,7 +57,7 @@ function redirectToLogin(): void {
  * else setError(json.error?.message ?? "失败");
  * ```
  */
-export async function apiFetch<T = any>(
+export async function apiFetch<T = unknown>(
   url: string,
   init?: RequestInit,
 ): Promise<ApiEnvelope<T>> {
@@ -94,7 +94,7 @@ export async function apiFetch<T = any>(
     if (envelope && envelope.ok === false && envelope.error) {
       return envelope;
     }
-    return httpErrorEnvelope(res.status) as ApiEnvelope<T>;
+    return httpErrorEnvelope(res.status);
   }
 
   // res.ok：正常应为 { ok: true, data }

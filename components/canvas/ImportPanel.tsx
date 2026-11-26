@@ -68,8 +68,8 @@ export function ImportPanel({
       setLoading(true);
       setError("");
       Promise.all([
-        apiFetch("/api/v1/ask?page=1&pageSize=12"),
-        apiFetch("/api/v1/research?page=1&pageSize=12"),
+        apiFetch<{ questions: QuestionItem[] }>("/api/v1/ask?page=1&pageSize=12"),
+        apiFetch<{ tasks: ResearchItem[] }>("/api/v1/research?page=1&pageSize=12"),
       ])
         .then(([askJson, researchJson]) => {
           if (cancelled) return;
