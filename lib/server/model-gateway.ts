@@ -1,9 +1,12 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import OpenAI from "openai";
 import { ChatOpenAI } from "@langchain/openai";
+import { ChatAnthropic } from "@langchain/anthropic";
 import { env } from "@/lib/env";
 
 // Cause's approved model policy: Foundation-managed GPT-5.6 Sol, low effort.
+// Claude aliases (Bedrock route) only accept the native Anthropic Messages
+// protocol; OpenAI Responses dispatch fails with 409 profile_not_callable.
 // The route alias and Agent credential remain operator-owned configuration.
 const requestSignal = new AsyncLocalStorage<AbortSignal>();
 export function withModelRequestSignal<T>(signal: AbortSignal, operation: () => T): T {
@@ -34,6 +37,24 @@ type StreamOptions = Options & {
 const DEFAULT_MAX_TOKENS = 4096;
 const DEFAULT_STREAM_MAX_TOKENS_LIMIT = 32768;
 
+// Foundation 的 Claude 别名（含 Bedrock 路由）只支持 Anthropic Messages 协议
+function isAnthropicModel(model: string) { return /claude|anthropic/i.test(model); }
+function anthropicBaseURL() {
+  return `${env.MODEL_GATEWAY_BASE_URL.replace(/\/$/, "").replace(/\/openai\/v1$/, "")}/anthropic/v1`;
+}
+function anthropicHeaders(): Record<string, string> {
+  return {
+    authorization: `Bearer ${env.MODEL_GATEWAY_API_KEY}`, "x-api-key": env.MODEL_GATEWAY_API_KEY,
+    "anthropic-version": "2023-06-01", "content-type": "application/json",
+  };
+}
+/** OpenAI 文本消息 → Anthropic Messages 入参（system/developer 提升为顶层 system） */
+function toAnthropicMessages(messages: Array<{ role: string; content: string }>) {
+  const system = messages.filter(m => m.role === "system" || m.role === "developer").map(m => m.content).join("\n\n");
+  const input = messages.filter(m => m.role === "user" || m.role === "assistant").map(m => ({ role: m.role, content: m.content }));
+  return { ...(system ? { system } : {}), messages: input };
+}
+
 class FoundationOutputTokenLimitError extends Error {
   constructor() {
     super("Foundation generation failed (max_output_tokens)");
@@ -42,8 +63,19 @@ class FoundationOutputTokenLimitError extends Error {
 }
 
 export async function chatCompletion(messages: OpenAI.ChatCompletionMessageParam[], options?: Options): Promise<string> {
+  const model = options?.model ?? getDefaultModel();
+  if (isAnthropicModel(model)) {
+    const response = await gatewayFetch(`${anthropicBaseURL()}/messages`, {
+      method: "POST", headers: anthropicHeaders(),
+      body: JSON.stringify({ model, ...toAnthropicMessages(messages as Array<{ role: string; content: string }>),
+        max_tokens: options?.maxTokens ?? DEFAULT_MAX_TOKENS, ...(options?.temperature !== undefined ? { temperature: options.temperature } : {}) }),
+    });
+    if (!response.ok) throw new Error(`Foundation request failed (HTTP ${response.status})`);
+    const payload = await response.json() as { content?: Array<{ type?: string; text?: string }> };
+    return (payload.content ?? []).filter(block => block.type === "text").map(block => block.text ?? "").join("");
+  }
   const response = await getClient().chat.completions.create({
-    model: options?.model ?? getDefaultModel(), messages, reasoning_effort: "low", max_tokens: options?.maxTokens ?? DEFAULT_MAX_TOKENS,
+    model, messages, reasoning_effort: "low", max_tokens: options?.maxTokens ?? DEFAULT_MAX_TOKENS,
   });
   return response.choices[0]?.message.content ?? "";
 }
@@ -53,10 +85,14 @@ async function* streamOnce(
   options: StreamOptions | undefined,
   maxTokens: number,
 ): AsyncGenerator<string> {
+  const model = options?.model ?? getDefaultModel();
+  const anthropic = isAnthropicModel(model);
   const base = env.MODEL_GATEWAY_BASE_URL.replace(/\/$/, "");
-  const response = await gatewayFetch(`${base}/responses`, {
-    method: "POST", headers: { authorization: `Bearer ${env.MODEL_GATEWAY_API_KEY}`, "content-type": "application/json", accept: "text/event-stream" },
-    body: JSON.stringify({ model: options?.model ?? getDefaultModel(), input, reasoning: { effort: "low" }, max_output_tokens: maxTokens, stream: true, store: false }),
+  const response = await gatewayFetch(anthropic ? `${anthropicBaseURL()}/messages` : `${base}/responses`, {
+    method: "POST", headers: anthropic ? { ...anthropicHeaders(), accept: "text/event-stream" } : { authorization: `Bearer ${env.MODEL_GATEWAY_API_KEY}`, "content-type": "application/json", accept: "text/event-stream" },
+    body: JSON.stringify(anthropic
+      ? { model, ...toAnthropicMessages(input), max_tokens: maxTokens, stream: true }
+      : { model, input, reasoning: { effort: "low" }, max_output_tokens: maxTokens, stream: true, store: false }),
   });
   if (!response.ok || !response.body) throw new Error(`Foundation request failed (HTTP ${response.status})`);
   if (!response.headers.get("content-type")?.includes("text/event-stream")) throw new Error("Foundation did not return a native event stream");
@@ -65,7 +101,18 @@ async function* streamOnce(
   function parse(frame: string): string | null {
     const data = frame.split("\n").filter(line => line.startsWith("data:")).map(line => line.slice(5).trimStart()).join("\n");
     if (!data || data === "[DONE]") return null;
-    const event = JSON.parse(data) as { type?: string; delta?: unknown; error?: { code?: string }; response?: { status?: string; error?: { code?: string }; incomplete_details?: { reason?: string } } };
+    const event = JSON.parse(data) as { type?: string; delta?: unknown; error?: { code?: string; type?: string }; response?: { status?: string; error?: { code?: string }; incomplete_details?: { reason?: string } } };
+    if (anthropic) {
+      // Anthropic SSE：error / message_delta(stop_reason) / message_stop / content_block_delta(text_delta)
+      if (event.type === "error") throw new Error(`Foundation generation failed (${event.error?.code ?? event.error?.type ?? "error"})`);
+      const delta = event.delta as { type?: string; text?: unknown; stop_reason?: string } | undefined;
+      if (event.type === "message_delta" && delta?.stop_reason === "max_tokens") throw new FoundationOutputTokenLimitError();
+      if (event.type === "message_delta" && delta?.stop_reason === "refusal") throw new Error("Foundation generation failed (refusal)");
+      if (event.type === "message_stop") { completed = true; return null; }
+      if (event.type !== "content_block_delta" || delta?.type !== "text_delta") return null;
+      if (typeof delta.text !== "string") throw new Error("Foundation text delta is invalid");
+      return delta.text;
+    }
     if (event.type === "response.incomplete" && event.response?.incomplete_details?.reason === "max_output_tokens") {
       throw new FoundationOutputTokenLimitError();
     }
@@ -133,9 +180,18 @@ export async function* chatCompletionStream(messages: OpenAI.ChatCompletionMessa
     }
   }
 }
-export function getChatModel(options?: { temperature?: number; maxTokens?: number; streaming?: boolean }): ChatOpenAI {
-  if (options?.streaming) throw new Error("Use chatCompletionStream for native Foundation Responses streaming");
-  return new ChatOpenAI({ model: getDefaultModel(), apiKey: env.MODEL_GATEWAY_API_KEY,
+export function getChatModel(options?: { temperature?: number; maxTokens?: number; streaming?: boolean }): ChatOpenAI | ChatAnthropic {
+  if (options?.streaming) throw new Error("Use chatCompletionStream for native Foundation streaming");
+  const model = getDefaultModel();
+  if (isAnthropicModel(model)) {
+    // Claude 原生工具调用走 Anthropic Messages；Bedrock 路由无 OpenAI 调用目标
+    return new ChatAnthropic({ model, apiKey: env.MODEL_GATEWAY_API_KEY,
+      clientOptions: { baseURL: anthropicBaseURL(), timeout: env.MODEL_GATEWAY_TIMEOUT_MS, maxRetries: 0, fetch: gatewayFetch,
+        defaultHeaders: { authorization: `Bearer ${env.MODEL_GATEWAY_API_KEY}` } },
+      maxTokens: options?.maxTokens ?? 4096, ...(options?.temperature !== undefined ? { temperature: options.temperature } : {}),
+      streaming: false });
+  }
+  return new ChatOpenAI({ model, apiKey: env.MODEL_GATEWAY_API_KEY,
     configuration: { baseURL: env.MODEL_GATEWAY_BASE_URL, timeout: env.MODEL_GATEWAY_TIMEOUT_MS, fetch: gatewayFetch },
     // LangChain only recognizes bare provider names as reasoning models. Foundation
     // aliases include a namespace, so set the native wire parameter explicitly.
