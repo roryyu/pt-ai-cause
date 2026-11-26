@@ -11,7 +11,7 @@ it("yields each native text delta before completion, across UTF-8 and CRLF bound
   let output!: ReadableStreamDefaultController<Uint8Array>;
   const stream = new ReadableStream<Uint8Array>({ start(c) { output = c; } });
   const fetcher = vi.spyOn(globalThis, "fetch").mockResolvedValue(response(stream));
-  const generator = chatCompletionStream([{ role: "system", content: "Guide" }, { role: "user", content: "test" }], { temperature: 0.3 });
+  const generator = chatCompletionStream([{ role: "system", content: "Guide" }, { role: "user", content: "test" }]);
   const first = generator.next();
   const bytes = new TextEncoder().encode(frame({ type: "response.output_text.delta", delta: "你好" }));
   // Split inside a multibyte character, then between CR and LF.
@@ -37,11 +37,11 @@ it.each(["response.failed", "response.incomplete", "error", "missing-terminal", 
 });
 it("uses low effort and no unsupported sampling in unary and LangChain tool calls", async () => {
   const fetcher = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ choices: [{ message: { content: "answer" } }] }), { headers: { "content-type": "application/json" } }));
-  expect(await chatCompletion([{ role: "user", content: "test" }], { temperature: 0 })).toBe("answer");
+  expect(await chatCompletion([{ role: "user", content: "test" }])).toBe("answer");
   const params = JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body));
   expect(params).toMatchObject({ model: "openai/gpt-5.6-sol", reasoning_effort: "low" });
   expect(params.temperature).toBeUndefined();
-  const toolParams = getChatModel({ temperature: 0 }).invocationParams({});
+  const toolParams = getChatModel().invocationParams({});
   expect("reasoning" in toolParams && toolParams.reasoning).toEqual({ effort: "low" }); expect(toolParams.temperature).toBeUndefined();
 });
 it("propagates cancellation to Foundation without starting a retry", async () => {
@@ -90,10 +90,10 @@ const anthropicTokenLimited = frame({ type: "message_delta", delta: { stop_reaso
 it("routes Claude unary calls to Anthropic messages without reasoning params", async () => {
   mockEnv.MODEL_GATEWAY_DEFAULT_MODEL = CLAUDE;
   const fetcher = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ content: [{ type: "text", text: "answer" }] }), { headers: { "content-type": "application/json" } }));
-  expect(await chatCompletion([{ role: "system", content: "Guide" }, { role: "user", content: "test" }], { temperature: 0 })).toBe("answer");
+  expect(await chatCompletion([{ role: "system", content: "Guide" }, { role: "user", content: "test" }])).toBe("answer");
   expect(String(fetcher.mock.calls[0]?.[0])).toBe("https://foundation.test/openai/anthropic/v1/messages");
   const body = JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body));
-  expect(body).toEqual({ model: CLAUDE, system: "Guide", messages: [{ role: "user", content: "test" }], max_tokens: 4096, temperature: 0 });
+  expect(body).toEqual({ model: CLAUDE, system: "Guide", messages: [{ role: "user", content: "test" }], max_tokens: 4096 });
 });
 it("streams Claude text deltas from Anthropic SSE until message_stop", async () => {
   mockEnv.MODEL_GATEWAY_DEFAULT_MODEL = CLAUDE;
@@ -124,7 +124,7 @@ it("fails Claude streams on error events without retry", async () => {
 });
 it("uses ChatAnthropic for Claude tool calls", () => {
   mockEnv.MODEL_GATEWAY_DEFAULT_MODEL = CLAUDE;
-  const params = getChatModel({ temperature: 0 }).invocationParams({});
+  const params = getChatModel().invocationParams({});
   expect(params.model).toBe(CLAUDE);
   expect("reasoning" in params).toBe(false);
 });

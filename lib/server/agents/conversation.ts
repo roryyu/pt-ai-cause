@@ -63,7 +63,7 @@ export async function compressConversationContext(
         { role: "system", content: CONTEXT_SUMMARY_PROMPT },
         { role: "user", content: composeContextSummaryInput(prevSummary, question, answerContent) },
       ],
-      { temperature: 0, maxTokens: 800 },
+      { maxTokens: 800 },
     );
     const trimmed = summary.trim();
     return trimmed

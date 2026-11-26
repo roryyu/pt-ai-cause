@@ -56,7 +56,7 @@ export async function runDataAnalystWorker(ctx: AgentRunContext): Promise<string
     label: "数据分析 Agent 启动", status: "running",
   });
 
-  const llm = getChatModel({ temperature: 0 });
+  const llm = getChatModel();
 
   // 外部数据源与运行时语义模型（内置 + DB 自定义）：数据字典与算子目录全量注入
   const [externalSources, operatorDescription, tablesHint] = await Promise.all([
@@ -148,7 +148,7 @@ export async function runResearchWorker(ctx: AgentRunContext, critiqueIssues: st
     ? researchExternalSourcesBlock(externalSourcesSummary(externalSources))
     : "";
 
-  const llm = getChatModel({ temperature: 0.2 });
+  const llm = getChatModel();
   const agent = createReactAgent({
     llm,
     tools,

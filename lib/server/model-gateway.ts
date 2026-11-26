@@ -27,8 +27,8 @@ function getClient() {
     timeout: env.MODEL_GATEWAY_TIMEOUT_MS, maxRetries: 0, fetch: gatewayFetch });
   return client;
 }
-// Retain callers' legacy temperature option without forwarding unsupported sampling to Sol.
-type Options = { model?: string; temperature?: number; maxTokens?: number };
+// 新一代模型不再接受 temperature 等采样参数，请求一律不携带。
+type Options = { model?: string; maxTokens?: number };
 type StreamOptions = Options & {
   /** 缓冲完整正文后再输出，使预算耗尽重试不会重复下发已生成内容。 */
   bufferOutput?: boolean;
@@ -71,7 +71,7 @@ export async function chatCompletion(messages: OpenAI.ChatCompletionMessageParam
     const response = await gatewayFetch(`${anthropicBaseURL()}/v1/messages`, {
       method: "POST", headers: anthropicHeaders(),
       body: JSON.stringify({ model, ...toAnthropicMessages(messages as Array<{ role: string; content: string }>),
-        max_tokens: options?.maxTokens ?? DEFAULT_MAX_TOKENS, ...(options?.temperature !== undefined ? { temperature: options.temperature } : {}) }),
+        max_tokens: options?.maxTokens ?? DEFAULT_MAX_TOKENS }),
     });
     if (!response.ok) throw new Error(`Foundation request failed (HTTP ${response.status})`);
     const payload = await response.json() as { content?: Array<{ type?: string; text?: string }> };
@@ -183,7 +183,7 @@ export async function* chatCompletionStream(messages: OpenAI.ChatCompletionMessa
     }
   }
 }
-export function getChatModel(options?: { temperature?: number; maxTokens?: number; streaming?: boolean }): ChatOpenAI | ChatAnthropic {
+export function getChatModel(options?: { maxTokens?: number; streaming?: boolean }): ChatOpenAI | ChatAnthropic {
   if (options?.streaming) throw new Error("Use chatCompletionStream for native Foundation streaming");
   const model = getDefaultModel();
   if (isAnthropicModel(model)) {
@@ -191,7 +191,7 @@ export function getChatModel(options?: { temperature?: number; maxTokens?: numbe
     return new ChatAnthropic({ model, apiKey: env.MODEL_GATEWAY_API_KEY,
       clientOptions: { baseURL: anthropicBaseURL(), timeout: env.MODEL_GATEWAY_TIMEOUT_MS, maxRetries: 0, fetch: gatewayFetch,
         defaultHeaders: { authorization: `Bearer ${env.MODEL_GATEWAY_API_KEY}` } },
-      maxTokens: options?.maxTokens ?? 4096, ...(options?.temperature !== undefined ? { temperature: options.temperature } : {}),
+      maxTokens: options?.maxTokens ?? 4096,
       streaming: false });
   }
   return new ChatOpenAI({ model, apiKey: env.MODEL_GATEWAY_API_KEY,
