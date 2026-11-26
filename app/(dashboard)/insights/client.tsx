@@ -55,7 +55,7 @@ export function InsightsClient() {
     setLoading(true);
     try {
       const qs = kind ? `?kind=${kind}` : "";
-      const json = await apiFetch(`/api/v1/insights${qs}`);
+      const json = await apiFetch<{ docs: InsightDoc[] }>(`/api/v1/insights${qs}`);
       if (json.ok) setDocs(json.data.docs ?? []);
     } catch {
       setError("加载洞察文档列表失败");
@@ -74,7 +74,7 @@ export function InsightsClient() {
     if (!newTitle.trim()) return;
     setCreating(true);
     try {
-      const json = await apiFetch("/api/v1/insights", {
+      const json = await apiFetch<Pick<InsightDoc, "id">>("/api/v1/insights", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ title: newTitle.trim(), kind: newKind }),

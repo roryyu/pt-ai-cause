@@ -8,6 +8,12 @@ const control = "rounded-[8px] border px-3 py-2 text-xs disabled:opacity-50";
 const style = { borderColor: "var(--line)", background: "var(--paper)", color: "var(--ink)" };
 type Item = { id: string; name?: string; status?: string; manager?: boolean; resourceName?: string; type?: string };
 type Result = { rows: Record<string, unknown>[]; account?: { name: string; manager: boolean; currencyCode: string; timeZone: string }; note?: string; nextAfterId?: string | null; warning?: string };
+type GoogleAdsResponse = {
+  status: number;
+  elapsedMs: number;
+  fromCache: boolean;
+  body: Result & { error?: string; codes?: string[]; help?: Array<{ label: string; url: string }> };
+};
 type Page = { rows: Item[]; nextAfterId?: string | null };
 const statusName = (status?: string) => ({ ENABLED: "启用", PAUSED: "暂停", REMOVED: "已移除" })[status ?? ""] ?? status ?? "—";
 
@@ -48,7 +54,7 @@ export function GoogleAdsPanel({ source, onSaved }: {
     clearScope(); setCustomerId(id); setLoginCustomerId(manager);
   }
   async function request(path: string, body: Record<string, unknown>) {
-    const response = await apiFetch(`/api/v1/datasources/${source.id}/request`, {
+    const response = await apiFetch<GoogleAdsResponse>(`/api/v1/datasources/${source.id}/request`, {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ method: "POST", path, body }),
     });
@@ -57,7 +63,7 @@ export function GoogleAdsPanel({ source, onSaved }: {
     if (data.status !== 200) throw new Error(`${data.body?.error ?? "Google Ads 请求失败"}（HTTP ${data.status}）\n${(data.body?.codes ?? []).join(" / ")}\n${(data.body?.help ?? []).map((h: { label: string; url: string }) => `${h.label}：${h.url}`).join("\n")}`);
     if (path === "report") setCache(`${data.elapsedMs}ms · ${data.fromCache ? "短缓存" : "实时请求"}`);
     setNotice(data.body.warning ?? "");
-    return data.body as Result;
+    return data.body;
   }
   async function run(path: "accounts" | "account" | "clients" | "campaigns" | "conversionActions" | "report", afterId?: string | null) {
     if (busy) return;

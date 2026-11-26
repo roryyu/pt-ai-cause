@@ -29,6 +29,19 @@ interface DataSourceItem {
   meta: { protocol: "rest" | "graphql" | "ga4" | "google_ads"; authType: string; authConfigured: boolean | null; propertyId?: string; customerId?: string; loginCustomerId?: string } | null;
 }
 
+interface DataSourceTestResult {
+  ok: boolean;
+  kind?: string;
+  error?: string;
+  sampleCount?: number;
+  toolCount?: number;
+  latencyMs?: number;
+  statusCode?: number;
+  serverVersion?: string;
+  schemas?: string[];
+  hint?: string;
+}
+
 interface TableMetaItem {
   schema: string;
   table: string;
@@ -74,7 +87,7 @@ export function DataSourcesClient() {
 
   const loadSources = useCallback(async () => {
     try {
-      const json = await apiFetch("/api/v1/datasources");
+      const json = await apiFetch<{ dataSources: DataSourceItem[] }>("/api/v1/datasources");
       if (json.ok) {
         setSources(json.data.dataSources ?? []);
         setSelectedId((prev) => prev ?? json.data.dataSources?.[0]?.id ?? null);
@@ -95,7 +108,7 @@ export function DataSourcesClient() {
     setTestResult(null);
     setTestSourceKey(selectedSourceKey);
     try {
-      const json = await apiFetch(`/api/v1/datasources/${selectedId}/test`, { method: "POST" });
+      const json = await apiFetch<DataSourceTestResult>(`/api/v1/datasources/${selectedId}/test`, { method: "POST" });
       if (json.ok) {
         const d = json.data;
         let text: string;
@@ -141,7 +154,7 @@ export function DataSourcesClient() {
       setPreview(null);
       setQueryResult(null);
     });
-    apiFetch(`/api/v1/datasources/${selectedId}/schema`)
+    apiFetch<{ tables: TableMetaItem[] }>(`/api/v1/datasources/${selectedId}/schema`)
       .then((json) => {
         if (!cancelled && json.ok) setTables(json.data.tables ?? []);
       })
@@ -161,7 +174,7 @@ export function DataSourcesClient() {
       setLoadingPreview(true);
       setExpandedTable(`${schema}.${table}`);
       try {
-        const json = await apiFetch(`/api/v1/datasources/${selectedId}/preview?schema=${schema}&table=${table}&limit=50`);
+        const json = await apiFetch<QueryResult>(`/api/v1/datasources/${selectedId}/preview?schema=${schema}&table=${table}&limit=50`);
         if (json.ok) {
           setPreview({ table: `${schema}.${table}`, result: json.data });
         }
@@ -179,7 +192,7 @@ export function DataSourcesClient() {
     setQueryError("");
     setQueryResult(null);
     try {
-      const json = await apiFetch(`/api/v1/datasources/${selectedId}/query`, {
+      const json = await apiFetch<QueryResult>(`/api/v1/datasources/${selectedId}/query`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ sql, schema: "data", maxRows: 200 }),
@@ -906,7 +919,13 @@ function Ga4SourcePanel({ source, onSaved }: { source: DataSourceItem; onSaved: 
       const body: Record<string, unknown> = nextPage
         ? { ...lastRequest, offset: result!.nextOffset }
         : JSON.parse(bodyText);
-      const json = await apiFetch(`/api/v1/datasources/${source.id}/request`, {
+      const json = await apiFetch<{
+        status: number;
+        body: Ga4ReportResult & { error?: string };
+        elapsedMs: number;
+        fromCache: boolean;
+        cacheState?: string;
+      }>(`/api/v1/datasources/${source.id}/request`, {
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ method: "POST", path: "runReport", body }),
       });
@@ -1211,7 +1230,14 @@ function ApiSourcePanel({ source }: { source: DataSourceItem }) {
           }
         }
       }
-      const json = await apiFetch(`/api/v1/datasources/${source.id}/${action}`, {
+      const json = await apiFetch<{
+        body?: unknown;
+        data?: unknown;
+        errors?: unknown[];
+        elapsedMs: number;
+        status?: number;
+        truncated?: boolean;
+      }>(`/api/v1/datasources/${source.id}/${action}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(payload),
@@ -1243,7 +1269,7 @@ function ApiSourcePanel({ source }: { source: DataSourceItem }) {
     setLoadingFields(true);
     setError("");
     try {
-      const json = await apiFetch(`/api/v1/datasources/${source.id}/schema`);
+      const json = await apiFetch<{ fields: GraphQLFieldItem[] }>(`/api/v1/datasources/${source.id}/schema`);
       if (json.ok) setSchemaFields(json.data.fields ?? []);
       else setError(json.error?.message ?? "Schema 内省失败");
     } catch (err) {
@@ -1407,6 +1433,12 @@ interface McpToolItem {
   inputSchema: unknown;
 }
 
+interface McpInvokeResult {
+  result: string;
+  elapsedMs: number;
+  truncated: boolean;
+}
+
 interface McpStepItem {
   tool: string;
   input: unknown;
@@ -1426,7 +1458,7 @@ function McpSourcePanel({ source }: { source: DataSourceItem }) {
   const [argsText, setArgsText] = useState("{}");
   const [invoking, setInvoking] = useState(false);
   const [invokeError, setInvokeError] = useState("");
-  const [invokeResult, setInvokeResult] = useState<{ result: string; elapsedMs: number; truncated: boolean } | null>(null);
+  const [invokeResult, setInvokeResult] = useState<McpInvokeResult | null>(null);
 
   // ReAct Agent
   const [task, setTask] = useState("");
@@ -1438,7 +1470,7 @@ function McpSourcePanel({ source }: { source: DataSourceItem }) {
     let cancelled = false;
     (async () => {
       try {
-        const json = await apiFetch(`/api/v1/datasources/${source.id}/tools`);
+        const json = await apiFetch<{ tools: McpToolItem[] }>(`/api/v1/datasources/${source.id}/tools`);
         if (cancelled) return;
         if (json.ok) setTools(json.data.tools ?? []);
         else setToolsError(json.error?.message ?? "工具列表获取失败");
@@ -1472,7 +1504,7 @@ function McpSourcePanel({ source }: { source: DataSourceItem }) {
     setInvokeError("");
     setInvokeResult(null);
     try {
-      const json = await apiFetch(`/api/v1/datasources/${source.id}/invoke`, {
+      const json = await apiFetch<McpInvokeResult>(`/api/v1/datasources/${source.id}/invoke`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ tool: toolName.trim(), args }),
