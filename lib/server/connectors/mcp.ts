@@ -150,7 +150,7 @@ export async function runMcpReactAgent(
       throw new Error("MCP 代理未暴露任何工具");
     }
     const agent = createReactAgent({
-      llm: getChatModel({ temperature: 0 }),
+      llm: getChatModel(),
       tools,
       prompt: MCP_AGENT_PROMPT,
     });

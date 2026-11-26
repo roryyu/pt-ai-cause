@@ -139,7 +139,7 @@ async function planResearch(
       { role: "system", content: PLANNER_PROMPT },
       { role: "user", content: prefixes ? `${prefixes}\n\n研究问题：${question}` : question },
     ],
-    { temperature: 0.2, maxTokens: 2048 },
+    { maxTokens: 2048 },
   );
   const parsed = extractJson(raw);
   if (!parsed || typeof parsed !== "object") {
@@ -200,7 +200,7 @@ async function generateKnowledgeAnswer(
             content: `${contextBlock ? `${contextBlock}\n\n` : ""}研究问题：${question}\n研究目标：${objective}`,
           },
         ],
-        { temperature: 0.3, maxTokens: 2048 },
+        { maxTokens: 2048 },
       ),
       new Promise<never>((_, reject) => {
         timer = setTimeout(
@@ -367,7 +367,7 @@ async function collectEvidenceForSubQuestion(
         { role: "system", content: EXTRACTOR_PROMPT },
         { role: "user", content: `子问题：${plan.question}\n\n检索材料：\n${materialBlock}` },
       ],
-      { temperature: 0.2, maxTokens: 2048 },
+      { maxTokens: 2048 },
     );
     const parsed = extractJson(raw);
     if (parsed && Array.isArray(parsed.findings)) {
@@ -634,7 +634,7 @@ export async function runDeepResearch(options: DeepResearchOptions): Promise<Dee
           content: `${sourceBlock}${graphBlock}研究问题：${question}\n研究目标：${objective}\n\n## 原始证据\n${sourceEvidenceBlock}\n\n${compareBlock}${knowledgeBlock}## 各子问题研究发现\n${evidenceBlock}\n\n## 引用来源\n${citationBlock}`,
         },
       ],
-      { temperature: 0.3, maxTokens: 8192, bufferOutput: options.bufferOutput },
+      { maxTokens: 8192, bufferOutput: options.bufferOutput },
     )) {
       report += chunk;
       sink({ type: "chunk", content: chunk });

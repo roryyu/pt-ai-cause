@@ -238,12 +238,12 @@ describe("缓存、诊断与工作流集成", () => {
     await cachedRestRequest(config, request("campaigns", { afterId: "41" }), options);
     expect(cache.size).toBe(8);
   });
-  it("campaign 缓存30秒，报告缓存300秒", async () => {
+  it("campaign 与报告缓存均为 24 小时", async () => {
     await cachedRestRequest(config, request("campaigns"), { sourceId: source.id, skipThrottle: true });
     const expiry = [...cache.values()][0]!.expiresAt.getTime() - Date.now();
-    expect(expiry).toBeGreaterThan(29000); expect(expiry).toBeLessThanOrEqual(30000);
+    expect(expiry).toBeGreaterThan(86_399_000); expect(expiry).toBeLessThanOrEqual(86_400_000);
     await cachedRestRequest(config, request("report", report), { sourceId: source.id, skipThrottle: true });
-    expect([...cache.values()][1]!.expiresAt.getTime() - Date.now()).toBeGreaterThan(299000);
+    expect([...cache.values()][1]!.expiresAt.getTime() - Date.now()).toBeGreaterThan(86_399_000);
   });
   it("权限拒绝不回退过期缓存，不泄露认证", async () => {
     const input = request("campaigns");

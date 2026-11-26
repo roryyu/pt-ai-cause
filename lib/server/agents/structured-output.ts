@@ -96,7 +96,7 @@ export async function extractStructuredRows(input: ExtractStructuredInput): Prom
         { role: "system", content: EXTRACT_SYSTEM_PROMPT },
         { role: "user", content: userContent },
       ],
-      { temperature: 0, maxTokens: MAX_OUTPUT_TOKENS },
+      { maxTokens: MAX_OUTPUT_TOKENS },
     );
     let parsed: unknown;
     try {

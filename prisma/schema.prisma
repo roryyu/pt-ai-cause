@@ -509,6 +509,28 @@ model DeliveryRecord {
   @@index([docId])
 }
 
+// ─── MCP 调用日志 ────────────────────────────────────────────────────────────────
+
+/// MCP 调用日志：外部系统经 MCP 调用 ask / deep_research 的输入、输出与执行结果
+/// 由 mcp/call-log.ts 在工具执行前后写入；日志写入失败不阻断业务调用
+model McpCallLog {
+  id          String    @id // mcp_log_xxx
+  tool        String // 工具名：ask / deep_research
+  status      String    @default("running") // running / completed / failed
+  input       Json // 工具入参（MCP tools/call arguments）
+  output      Json? // 成功时的最终返回 payload
+  error       String?   @db.Text // 失败时的错误信息
+  questionId  String?   @map("question_id") // 关联问答（成功时从返回 payload 提取）
+  elapsedMs   Int?      @map("elapsed_ms")
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  completedAt DateTime? @map("completed_at") @db.Timestamptz(3)
+
+  @@schema("cause")
+  @@map("mcp_call_logs")
+  @@index([createdAt])
+  @@index([tool, status])
+}
+
 // ─── 审计日志（design.md 8.3）─────────────────────────────────────────────────────
 
 /// 审计日志表

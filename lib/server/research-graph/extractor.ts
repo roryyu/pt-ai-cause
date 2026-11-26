@@ -40,7 +40,7 @@ export async function extractGraphPatch(
         { role: "system", content: GRAPH_EXTRACT_PROMPT },
         { role: "user", content: composeExtractInput(question, objective, subResults, report) },
       ],
-      { temperature: 0.1, maxTokens: 2048 },
+      { maxTokens: 2048 },
     );
     return parseGraphPatch(raw);
   } catch {

@@ -35,6 +35,9 @@ dsh 主 agent ── run_cause_task ──> dsh-cause 插件 ── 启动子 ag
   `context.via = "mcp"` 标明来源。差异：MCP 任务问答不写 Agent 轨迹明细（`research_tasks` 的 supervisor/worker/critic 行），
   深度研究的子任务照常落库。**修改任一侧持久化结构时须同步另一侧**（`mcp/tasks.ts` ↔ `app/api/v1/{ask,research}/route.ts`；
   会话上下文逻辑已抽到 `lib/server/agents/conversation.ts` 共用）。
+- 调用日志：每次工具调用经 `mcp/call-log.ts` 落 `mcp_call_logs` 表（工具名 ask / deep_research、输入、输出、
+  成败与耗时；执行前先落 running 行，日志写入失败不阻断业务）。平台「MCP 日志」页（`/mcp-logs`，
+  API `/api/v1/mcp-logs`）可按工具/状态筛选并查看完整输入输出 JSON，供外部系统调用排障。
 
 ## 2. 鉴权（专用 Key，不走浏览器登录）
 
@@ -118,9 +121,11 @@ CAUSE_MCP_TOKEN=<与 CAUSE_MCP_API_KEY 同值>
 | `mcp/auth.ts` | Bearer 恒定时间比较、服务身份 |
 | `mcp/protocol.ts` | 工具入参形状与返回 payload 类型（纯 zod） |
 | `mcp/tasks.ts` | 两个工具的业务实现与落库 |
+| `mcp/call-log.ts` | 调用日志包装器（工具名/输入/输出/成败落 `mcp_call_logs`，故障不阻断业务） |
 | `mcp/app.ts` | McpServer 装配（与传输解耦，可 InMemoryTransport 直连测试） |
 | `mcp/server.ts` | streamable-http 入口（node:http，无状态） |
 | `tests/mcp-service.test.ts` | 16 个单测：env/鉴权/落库口径/协议装配（不连 DB、模型、网络） |
+| `tests/mcp-call-log.test.ts` | 调用日志单测：成功/失败回写与日志故障不阻断业务 |
 
 ```bash
 npx vitest run tests/mcp-service.test.ts

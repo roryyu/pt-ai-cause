@@ -27,6 +27,8 @@ import {
  * - date_period 结束日早于昨天 → 7 天（历史数据已稳定）
  * - 含今天/昨天（yesterday、-Nd:-1d、today 等）→ 30 分钟（数据仍可能修正）
  * - 未识别 → 默认 1 小时
+ *
+ * Google Ads 固定 24 小时：条件完全一致（同一数据源 + 解析后的完整操作模板参数）即命中缓存。
  */
 
 /** 带缓存标注的 API 调用结果 */
@@ -53,6 +55,8 @@ export interface CachedRestRequestOptions {
 const DEFAULT_TTL_SECONDS = 3600;
 const STABLE_TTL_SECONDS = 7 * 86400;
 const RECENT_TTL_SECONDS = 1800;
+/** Google Ads 查询缓存有效期：24 小时（所有操作模板统一） */
+const GOOGLE_ADS_TTL_SECONDS = 24 * 3600;
 /** 同一数据源最小调用间隔（ms）——单实例内存限流，够用且无外部依赖 */
 const MIN_CALL_INTERVAL_MS = 200;
 /** 429/5xx 指数退避重试次数（官方建议：指数退避 + 抖动，勿紧密循环重试） */
@@ -316,7 +320,7 @@ async function cachedRequestWithinDeadline(
 
   // 4. 成功响应（2xx）写入缓存；body 以原始文本存储
   if (cacheEnabled && result.status >= 200 && result.status < 300 && !result.truncated) {
-    const ttl = options.ttlSeconds ?? (adsAction ? (adsAction.action === "report" ? 300 : 30) : ga4Action ? 300 : resolveTtlSeconds(input.params));
+    const ttl = options.ttlSeconds ?? (adsAction ? GOOGLE_ADS_TTL_SECONDS : ga4Action ? 300 : resolveTtlSeconds(input.params));
     const rawBody = typeof result.body === "string" ? result.body : JSON.stringify(result.body);
     try {
       await withDeadline(() => prisma.apiQueryCache.upsert({

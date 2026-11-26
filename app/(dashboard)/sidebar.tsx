@@ -12,6 +12,7 @@ import {
   Database,
   Layers,
   Boxes,
+  ScrollText,
 } from "lucide-react";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
@@ -30,6 +31,7 @@ const ADMIN_ITEMS = [
   { href: "/datasources", label: "数据源管理", icon: Database },
   { href: "/semantic", label: "语义层", icon: Layers },
   { href: "/operators", label: "算子中心", icon: Boxes },
+  { href: "/mcp-logs", label: "MCP 日志", icon: ScrollText },
 ] as const;
 
 export function Sidebar() {

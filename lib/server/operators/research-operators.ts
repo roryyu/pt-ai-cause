@@ -87,7 +87,7 @@ export async function runExtractOp(input: z.infer<typeof ExtractInput>): Promise
         { role: "system", content: PAGE_EXTRACT_PROMPT },
         { role: "user", content: `关注问题：${input.focus ?? "关键事实、数据与时间"}\n标题：${page.title}\n正文：\n${page.text}` },
       ],
-      { temperature: 0.1, maxTokens: 3072 },
+      { maxTokens: 3072 },
     );
     const json = content.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
     const parsed = z.object({ points: z.array(z.unknown()) }).parse(JSON.parse(json));
@@ -153,7 +153,7 @@ ${input.text}`;
 
     const content = await chatCompletion(
       [{ role: "user", content: prompt }],
-      { temperature: 0.2, maxTokens: 1024 },
+      { maxTokens: 1024 },
     );
     return {
       ok: true,
@@ -206,7 +206,7 @@ ${input.sources}
 
     const content = await chatCompletion(
       [{ role: "user", content: prompt }],
-      { temperature: 0.2, maxTokens: 1536 },
+      { maxTokens: 1536 },
     );
     return {
       ok: true,
@@ -311,7 +311,7 @@ ${input.material}
 
     const content = await chatCompletion(
       [{ role: "user", content: prompt }],
-      { temperature: 0.3, maxTokens: 2048 },
+      { maxTokens: 2048 },
     );
     return {
       ok: true,

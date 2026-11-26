@@ -21,6 +21,7 @@ const actor = serviceActor(config);
 // 依赖应用环境（lib/env）的模块在 loadEnvFile 之后动态加载（同 scripts/agent-smoke.ts 模式）
 const { createCauseMcpServer } = await import("./app");
 const { runAskTask, runResearchTask } = await import("./tasks");
+const { withCallLog } = await import("./call-log");
 const { StreamableHTTPServerTransport } = await import("@modelcontextprotocol/sdk/server/streamableHttp.js");
 
 const json = (res: ServerResponse, status: number, body: unknown): void => {
@@ -65,9 +66,10 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   }
 
   // 无状态：每个请求独立的 server + transport，响应结束即释放
+  // 每次工具调用经 withCallLog 落库（工具名/输入/输出/成败），供平台 /mcp-logs 页排障
   const server = createCauseMcpServer({
-    ask: (input, sink) => runAskTask(input, actor, sink),
-    research: (input, sink) => runResearchTask(input, actor, sink),
+    ask: (input, sink) => withCallLog("ask", input, () => runAskTask(input, actor, sink)),
+    research: (input, sink) => withCallLog("deep_research", input, () => runResearchTask(input, actor, sink)),
   });
   // SSE 流式响应（同 /ask 页面的模式）：SDK 每 15 秒自动发 keep-alive 注释帧，
   // 连接始终有数据流动，ALB 60 秒 idle 超时不会触发；最终结果仍是完整 JSON-RPC result。

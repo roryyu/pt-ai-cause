@@ -74,7 +74,7 @@ async function supervisorNode(state: WorkflowStateType): Promise<Partial<Workflo
         ...ctx.history.slice(-4).map((h) => ({ role: h.role, content: h.content.slice(0, 300) })),
         { role: "user", content: ctx.question },
       ],
-      { temperature: 0, maxTokens: 200 },
+      { maxTokens: 200 },
     );
     const parsed = extractJson(raw);
     if (parsed && typeof parsed.route === "string" && ["direct", "data_analysis", "research"].includes(parsed.route)) {
@@ -119,7 +119,6 @@ async function directAnswerNode(state: WorkflowStateType): Promise<Partial<Workf
   let answer = "";
   try {
     for await (const chunk of chatCompletionStream(messages, {
-      temperature: 0.5,
       maxTokens: 8192,
       bufferOutput: state.bufferOutput,
     })) {
@@ -192,7 +191,7 @@ async function criticNode(state: WorkflowStateType): Promise<Partial<WorkflowSta
             content: `研究问题：${ctx.question}\n\n执行过的检索：${searchedQueries.join("；")}\n\n研究发现：\n${notes.map((n, i) => `${i + 1}. ${n}`).join("\n")}\n\n引用来源：${citations.map((c) => `[${c.no}] ${c.title}`).join("；")}`,
           },
         ],
-        { temperature: 0, maxTokens: 400 },
+        { maxTokens: 400 },
       );
       const parsed = extractJson(raw);
       if (parsed && typeof parsed.score === "number") {
@@ -278,7 +277,7 @@ ${sections.join("\n\n")}`;
       ],
       // 多计划 × 多天的明细报告 + 缺口分析实测可超 4096 输出 token，
       // 超限会触发 response.incomplete 使整个 ask 失败（2026-11-23 联调）。
-      { temperature: 0.3, maxTokens: 8192, bufferOutput: state.bufferOutput },
+      { maxTokens: 8192, bufferOutput: state.bufferOutput },
     )) {
       answer += chunk;
       ctx.sink({ type: "chunk", content: chunk });
