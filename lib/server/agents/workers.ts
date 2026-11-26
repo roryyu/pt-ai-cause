@@ -15,6 +15,7 @@ import { nextStepId } from "./events";
 import {
   buildDataAnalystPrompt, RESEARCHER_PROMPT,
   dataAnalystExternalSourcesBlock, researchExternalSourcesBlock, critiqueFeedbackBlock,
+  currentTimeContextBlock,
 } from "./prompts";
 
 /**
@@ -85,7 +86,8 @@ export async function runDataAnalystWorker(ctx: AgentRunContext): Promise<string
   const agent = createReactAgent({
     llm,
     tools,
-    prompt: buildDataAnalystPrompt(tablesHint, env.ASK_LOCAL_SQL_ENABLED) + externalBlock,
+    // 当前时间由程序注入：相对时间（近一周/昨天等）须换算成具体日期区间后再取数
+    prompt: buildDataAnalystPrompt(tablesHint, env.ASK_LOCAL_SQL_ENABLED) + externalBlock + `\n\n${currentTimeContextBlock()}`,
   });
 
   const messages: Array<{ role: "user"; content: string }> = [
@@ -152,7 +154,7 @@ export async function runResearchWorker(ctx: AgentRunContext, critiqueIssues: st
   const agent = createReactAgent({
     llm,
     tools,
-    prompt: RESEARCHER_PROMPT + externalBlock,
+    prompt: RESEARCHER_PROMPT + externalBlock + `\n\n${currentTimeContextBlock()}`,
   });
 
   const issueBlock = critiqueIssues.length > 0 ? critiqueFeedbackBlock(critiqueIssues) : "";

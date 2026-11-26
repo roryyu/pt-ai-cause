@@ -4,7 +4,7 @@ import type { AgentEvent, AgentRunContext } from "./events";
 import { createRunContext, nextStepId } from "./events";
 import { runDataAnalystWorker, runResearchWorker } from "./workers";
 import { extractCitationNos, renumberCitations, remapCitationText } from "@/lib/server/research-graph/review";
-import { ROUTING_PROMPT, DIRECT_ANSWER_PROMPT, CRITIC_PROMPT, SYNTHESIZER_PROMPT } from "./prompts";
+import { ROUTING_PROMPT, DIRECT_ANSWER_PROMPT, CRITIC_PROMPT, SYNTHESIZER_PROMPT, currentTimeContextBlock } from "./prompts";
 import { extractStructuredRows } from "./structured-output";
 import type { ResponseSchemaSpec } from "./response-schema";
 
@@ -70,7 +70,8 @@ async function supervisorNode(state: WorkflowStateType): Promise<Partial<Workflo
   try {
     const raw = await chatCompletion(
       [
-        { role: "system", content: ROUTING_PROMPT },
+        // 当前时间由程序注入，避免模型无时间概念、无法推论「近一周」等模糊时间段
+        { role: "system", content: `${ROUTING_PROMPT}\n\n${currentTimeContextBlock()}` },
         ...ctx.history.slice(-4).map((h) => ({ role: h.role, content: h.content.slice(0, 300) })),
         { role: "user", content: ctx.question },
       ],
@@ -111,7 +112,7 @@ async function directAnswerNode(state: WorkflowStateType): Promise<Partial<Workf
   ctx.sink({ type: "step", stepId, agent: "assistant", label: "生成回答", status: "running" });
 
   const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
-    { role: "system", content: DIRECT_ANSWER_PROMPT },
+    { role: "system", content: `${DIRECT_ANSWER_PROMPT}\n\n${currentTimeContextBlock()}` },
     ...ctx.history.slice(-6).map((h) => ({ role: h.role, content: h.content })),
     { role: "user", content: ctx.question },
   ];
@@ -272,7 +273,7 @@ ${sections.join("\n\n")}`;
   try {
     for await (const chunk of chatCompletionStream(
       [
-        { role: "system", content: SYNTHESIZER_PROMPT },
+        { role: "system", content: `${SYNTHESIZER_PROMPT}\n\n${currentTimeContextBlock()}` },
         { role: "user", content: userContent },
       ],
       // 多计划 × 多天的明细报告 + 缺口分析实测可超 4096 输出 token，
