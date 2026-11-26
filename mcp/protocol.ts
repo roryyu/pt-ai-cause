@@ -13,6 +13,7 @@ export const askToolShape = {
   parentQuestionId: z.string().optional().describe("多轮追问：上一轮问答返回的 questionId，取其会话上下文"),
   dataSourceIds: z.array(z.string()).optional().describe("限定分析的数据源 ID；不传用全部已接入数据源"),
   workspaceId: z.string().optional().describe("工作区 ID（可选）"),
+  includeDailyChart: z.boolean().optional().describe("随本次分析尝试返回一张有查询表格支持的日趋势图"),
   responseSchema: responseSchemaSpec
     .optional()
     .describe("结构化返回契约（可选，供定时同步等机器消费）：传入后从原始查询表格抽取符合字段规格的行数组，随结果 structured.rows 返回"),
@@ -39,13 +40,20 @@ export interface McpCitation {
   url: string;
 }
 
-/** 任务问答返回：完整答案在 answer；图表/表格全量数据落库，这里只给数量 */
+export interface DailyChart {
+  title: string;
+  labels: string[];
+  days: Array<{ date: string; values: number[] }>;
+}
+
+/** 任务问答返回：完整答案在 answer，按需投影一张经过核对的日趋势图。 */
 export interface AskTaskResult {
   questionId: string;
   status: "completed";
   route: "direct" | "data_analysis" | "research";
   answer: string;
   chartCount: number;
+  dailyChart?: DailyChart;
   tableCount: number;
   citations: McpCitation[];
   critique: { score: number; passed: boolean } | null;
@@ -72,6 +80,7 @@ export const ASK_TOOL_DESCRIPTION = [
   "（任务）Cause 归因平台的任务问答：对已接入的投放数据做自然语言分析（自动路由数据分析 / 研究 / 直接回答），同步返回最终答案。",
   "会在 Cause 系统创建问答记录（questionId 可用于追问或发起深度研究）。耗时通常 10 秒～2 分钟。",
   "可选 responseSchema（fields: name/type/required/description）：传入后额外返回 structured.rows（从原始查询表格抽取的扁平行数组，经严格校验）；抽取失败时 structured 为 null 并附 structuredError，答案不受影响。",
+  "可选 includeDailyChart：只从本次问答的已有日图和对应查询表格投影 dailyChart；证据不匹配时省略。",
   "返回 JSON：questionId、route、answer（Markdown 全文）、chartCount、tableCount、citations、critique、elapsedMs、structured。",
 ].join("\n");
 

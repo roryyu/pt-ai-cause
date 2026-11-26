@@ -1,3 +1,4 @@
+import { dailyChart } from "./daily-chart";
 import { prisma } from "@/lib/db";
 import { newId } from "@/lib/server/ids";
 import { runAgentWorkflow } from "@/lib/server/agents/supervisor";
@@ -112,6 +113,9 @@ export async function runAskTask(input: AskTaskInput, actor: McpActor, sink?: (e
       route: result.route,
       answer: result.finalAnswer,
       chartCount: result.dataFindings.charts.length,
+      ...(input.includeDailyChart && result.route === "data_analysis"
+        ? { dailyChart: dailyChart(result.dataFindings.charts, result.dataFindings.tables) }
+        : {}),
       tableCount: result.dataFindings.tables.length,
       citations: result.researchFindings.citations,
       critique: result.critique ? { score: result.critique.score, passed: result.critique.passed } : null,

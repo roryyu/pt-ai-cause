@@ -89,7 +89,7 @@ export function SemanticClient() {
 
   const loadModels = useCallback(async (keepSelection = false) => {
     try {
-      const json = await apiFetch("/api/v1/semantic/models");
+      const json = await apiFetch<{ models: SemanticModelItem[] }>("/api/v1/semantic/models");
       if (json.ok) {
         const list: SemanticModelItem[] = json.data.models ?? [];
         setModels(list);
@@ -107,7 +107,7 @@ export function SemanticClient() {
 
   const loadDataSources = useCallback(async () => {
     try {
-      const json = await apiFetch("/api/v1/datasources");
+      const json = await apiFetch<{ dataSources: DataSourceOption[] }>("/api/v1/datasources");
       if (json.ok) {
         // 语义模型仅支持 PostgreSQL（bi）数据源
         setDataSources(
@@ -163,7 +163,7 @@ export function SemanticClient() {
         timeRange: from || to ? { from: from || undefined, to: to || undefined } : {},
         limit: 200,
       };
-      const json = await apiFetch("/api/v1/semantic/translate", {
+      const json = await apiFetch<TranslateResult>("/api/v1/semantic/translate", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
@@ -575,7 +575,7 @@ function ModelEditor({
           description: d.description.trim(),
         })),
       };
-      const json = await apiFetch(
+      const json = await apiFetch<{ id?: string }>(
         model ? `/api/v1/semantic/models/${model.id}` : "/api/v1/semantic/models",
         {
           method: model ? "PUT" : "POST",

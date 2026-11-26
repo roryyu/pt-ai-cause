@@ -31,7 +31,7 @@ export function WorkspaceClient() {
     setLoading(true);
     setError("");
     try {
-      const json = await apiFetch("/api/v1/dashboard/stats");
+      const json = await apiFetch<DashboardStats>("/api/v1/dashboard/stats");
       if (json.ok) {
         setData(json.data);
       } else {

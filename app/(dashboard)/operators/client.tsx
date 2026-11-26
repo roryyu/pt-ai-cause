@@ -86,7 +86,7 @@ export function OperatorsClient() {
 
   const loadOperators = useCallback(async () => {
     try {
-      const json = await apiFetch("/api/v1/operators");
+      const json = await apiFetch<{ operators: OperatorItem[] }>("/api/v1/operators");
       if (json.ok) {
         const list: OperatorItem[] = json.data.operators ?? [];
         setOperators(list);
@@ -155,7 +155,7 @@ export function OperatorsClient() {
     setError("");
     setResult(null);
     try {
-      const json = await apiFetch("/api/v1/operators", {
+      const json = await apiFetch<RunResult>("/api/v1/operators", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ operatorId: selected.id, input: buildInput() }),

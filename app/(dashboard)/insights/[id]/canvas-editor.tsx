@@ -280,7 +280,7 @@ export function InsightsDetailEditor({
     let cancelled = false;
     (async () => {
       try {
-        const json = await apiFetch(`/api/v1/insights/${docId}`);
+        const json = await apiFetch<DocMeta & { schedules?: ScheduleJobView[] }>(`/api/v1/insights/${docId}`);
         if (cancelled) return;
         if (json.ok) {
           const d = json.data;
@@ -288,7 +288,7 @@ export function InsightsDetailEditor({
             id: d.id,
             title: d.title,
             kind: d.kind,
-            snapshot: (d.snapshot ?? null) as TLStoreSnapshot | null,
+            snapshot: d.snapshot ?? null,
           });
           setJobs(d.schedules ?? []);
         } else {
@@ -377,9 +377,9 @@ export function InsightsDetailEditor({
     let cancelled = false;
     (async () => {
       try {
-        const json = await apiFetch(`/api/v1/insights/${docId}/bindings`);
+        const json = await apiFetch<{ bindings: BindingView[] }>(`/api/v1/insights/${docId}/bindings`);
         if (cancelled || !json.ok) return;
-        (json.data.bindings as BindingView[]).forEach(applyBinding);
+        json.data.bindings.forEach(applyBinding);
       } catch {
         // 静默：10s 轮询会再拉一次
       }
@@ -395,9 +395,9 @@ export function InsightsDetailEditor({
     let cancelled = false;
     const timer = setInterval(async () => {
       try {
-        const json = await apiFetch(`/api/v1/insights/${docId}/bindings?refresh=1`);
+        const json = await apiFetch<{ bindings: BindingView[] }>(`/api/v1/insights/${docId}/bindings?refresh=1`);
         if (cancelled || !json.ok) return;
-        (json.data.bindings as BindingView[]).forEach(applyBinding);
+        json.data.bindings.forEach(applyBinding);
       } catch {
         // 轮询失败静默，下一轮重试
       }
@@ -450,7 +450,7 @@ export function InsightsDetailEditor({
           },
         });
         try {
-          const json = await apiFetch(`/api/v1/insights/${docId}/bindings`, {
+          const json = await apiFetch<BindingView>(`/api/v1/insights/${docId}/bindings`, {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({
@@ -460,7 +460,7 @@ export function InsightsDetailEditor({
             }),
           });
           if (!json.ok) throw new Error(json.error?.message ?? "绑定失败");
-          applyBinding(json.data as BindingView);
+          applyBinding(json.data);
           created += 1;
         } catch (error) {
           ed.deleteShape(shapeId);
@@ -541,7 +541,7 @@ export function InsightsDetailEditor({
     if (!recipients.trim() || busy) return;
     setBusy(true);
     try {
-      const json = await apiFetch(`/api/v1/insights/${docId}/deliver`, {
+      const json = await apiFetch<{ detail?: { mock?: boolean } }>(`/api/v1/insights/${docId}/deliver`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ channel: "email", recipients: recipients.trim() }),
@@ -574,7 +574,7 @@ export function InsightsDetailEditor({
     }
     setBusy(true);
     try {
-      const json = await apiFetch("/api/v1/schedules", {
+      const json = await apiFetch<ScheduleJobView>("/api/v1/schedules", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -616,11 +616,11 @@ export function InsightsDetailEditor({
   const handleRunJobs = useCallback(async () => {
     setBusy(true);
     try {
-      const json = await apiFetch("/api/v1/schedules/run", { method: "POST" });
+      const json = await apiFetch<{ executed?: number }>("/api/v1/schedules/run", { method: "POST" });
       if (json.ok) {
         notify(`已触发，本次执行 ${json.data.executed ?? 0} 个任务`);
         // 刷新任务列表的 lastRunAt
-        const list = await apiFetch(`/api/v1/schedules?docId=${docId}`);
+        const list = await apiFetch<{ jobs: ScheduleJobView[] }>(`/api/v1/schedules?docId=${docId}`);
         if (list.ok) setJobs(list.data.jobs ?? []);
       } else {
         notify(json.error?.message ?? "触发失败");
