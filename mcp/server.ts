@@ -68,7 +68,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   // 无状态：每个请求独立的 server + transport，响应结束即释放
   // 每次工具调用经 withCallLog 落库（工具名/输入/输出/成败），供平台 /mcp-logs 页排障
   const server = createCauseMcpServer({
-    ask: (input, sink) => withCallLog("ask", input, () => runAskTask(input, actor, sink)),
+    ask: (input, sink) => withCallLog("ask", input, () => runAskTask(input, actor, sink, config.CAUSE_MCP_GOOGLE_ADS_REPORT_SOURCE_ID)),
     research: (input, sink) => withCallLog("deep_research", input, () => runResearchTask(input, actor, sink)),
   });
   // SSE 流式响应（同 /ask 页面的模式）：SDK 每 15 秒自动发 keep-alive 注释帧，
