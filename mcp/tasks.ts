@@ -1,4 +1,6 @@
 import { dailyChart } from "./daily-chart";
+import { resolveDataSource } from "@/lib/server/connectors/datasources";
+import { readGoogleAdsReport, type GoogleAdsReportScope } from "@/lib/server/connectors/google-ads";
 import { prisma } from "@/lib/db";
 import { newId } from "@/lib/server/ids";
 import { runAgentWorkflow } from "@/lib/server/agents/supervisor";
@@ -7,7 +9,7 @@ import { buildConversationContext, compressConversationContext } from "@/lib/ser
 import { researchSourceContextBlock, graphContextBlock } from "@/lib/server/agents/prompts";
 import { loadGraph } from "@/lib/server/research-graph/store";
 import { queryGraph } from "@/lib/server/research-graph/query";
-import type { AgentEvent } from "@/lib/server/agents/events";
+import type { AgentEvent, ChartSpec, TablePayload } from "@/lib/server/agents/events";
 import type { McpActor } from "./auth";
 import type {
   AskTaskInput, AskTaskResult, ResearchTaskInput, ResearchTaskResult,
@@ -51,13 +53,56 @@ async function ensureUser(actor: McpActor): Promise<void> {
 
 const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
+async function finishGoogleAdsAsk(scope: GoogleAdsReportScope, questionId: string, includeDailyChart?: boolean, reportSourceId?: string): Promise<AskTaskResult> {
+  const start = Date.now();
+  const source = reportSourceId ? await resolveDataSource(reportSourceId) : null;
+  if (!source?.apiConfig || source.type !== "api" || source.builtin) {
+    throw new Error("当前服务未开通该 Google Ads 报表范围");
+  }
+  const { report, days } = await readGoogleAdsReport(source.apiConfig, scope);
+  const window = `${scope.startDate} 至 ${scope.endDate}（${report.timeZone}）`;
+  const answer = report.status === "complete"
+    ? `${window}，Google Ads 广告系列 ${scope.campaignId}：花费 ${report.totals.spendMicros} 微${report.currency}，展示 ${report.totals.impressions} 次，点击 ${report.totals.clicks} 次。`
+    : report.status === "empty"
+      ? `${window}，Google Ads 未返回该系列的投放记录。`
+      : `${window}，Google Ads 报表数据不完整，暂无法汇总。`;
+  const elapsedMs = Date.now() - start;
+  const tables: TablePayload[] = days.length ? [{ title: `Google Ads 每日实绩（花费单位：微${report.currency}）`,
+    columns: ["date", "spendMicros", "impressions", "clicks"], rows: days }] : [];
+  const googleAdsDaily = includeDailyChart && report.status === "complete"
+    && Date.parse(scope.endDate) - Date.parse(scope.startDate) < 31 * 86_400_000 ? days : undefined;
+  const chartRows = includeDailyChart && days.length >= 2 && days.length <= 31
+    && days.every((day) => Number.isSafeInteger(Number(day.spendMicros)))
+    ? days.map((day) => ({ date: day.date, spend: Number(day.spendMicros) / 1_000_000 })) : [];
+  const charts: ChartSpec[] = chartRows.length
+    ? [{ type: "line", title: "Google Ads 每日花费", xKey: "date", yKeys: ["spend"], yLabel: "花费", unit: report.currency, data: chartRows }]
+    : [];
+  const chart = charts.length ? dailyChart(charts, [{ title: "Google Ads 每日花费", columns: ["date", "spend"], rows: chartRows }]) : undefined;
+  await prisma.question.update({
+    where: { id: questionId },
+    data: { status: "completed", answer: JSON.parse(JSON.stringify({
+      content: answer, route: "data_analysis", googleAdsReport: report, charts, tables, elapsedMs,
+    })) },
+  });
+  return {
+    questionId, status: "completed", route: "data_analysis", answer, googleAdsReport: report,
+    chartCount: chart ? 1 : 0, ...(chart ? { dailyChart: chart } : {}), tableCount: tables.length,
+    ...(googleAdsDaily ? { googleAdsDaily } : {}),
+    citations: [], critique: null, elapsedMs, structured: null,
+  };
+}
+
 /**
  * 任务问答：创建问答 → 多 Agent 工作流 → 压缩会话上下文 → 落库 → 返回最终答案。
  * 失败时把问答标记为 failed 再抛出（MCP 层转为 isError 结果）。
  */
-export async function runAskTask(input: AskTaskInput, actor: McpActor, sink?: (event: AgentEvent) => void): Promise<AskTaskResult> {
+export async function runAskTask(input: AskTaskInput, actor: McpActor, sink?: (event: AgentEvent) => void, reportSourceId?: string): Promise<AskTaskResult> {
+  const scope = input.googleAdsReport;
+  if (scope && (input.responseSchema || input.dataSourceIds || input.parentQuestionId || input.workspaceId)) {
+    throw new Error("Google Ads 明确日期报表使用服务端数据源，不能与 responseSchema、数据源、工作区或追问同用");
+  }
   await ensureUser(actor);
-  const { history, prevSummary } = await buildConversationContext(input.parentQuestionId);
+  const { history, prevSummary } = await buildConversationContext(scope ? undefined : input.parentQuestionId);
   const questionId = newId("question");
 
   await prisma.question.create({
@@ -72,12 +117,14 @@ export async function runAskTask(input: AskTaskInput, actor: McpActor, sink?: (e
         ...(input.dataSourceIds ? { dataSourceIds: input.dataSourceIds } : {}),
         ...(input.parentQuestionId ? { parentQuestionId: input.parentQuestionId } : {}),
         ...(input.responseSchema ? { responseSchema: input.responseSchema } : {}),
+        ...(input.googleAdsReport ? { googleAdsReport: input.googleAdsReport } : {}),
       },
       status: "analyzing",
     },
   });
 
   try {
+    if (scope) return await finishGoogleAdsAsk(scope, questionId, input.includeDailyChart, reportSourceId);
     const result = await runAgentWorkflow({
       questionId,
       question: input.question,

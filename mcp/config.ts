@@ -16,6 +16,8 @@ export const mcpEnvSchema = z.object({
   CAUSE_MCP_ACTOR_ID: z.string().min(1).default("user_mcp_service"),
   CAUSE_MCP_ACTOR_NAME: z.string().min(1).default("MCP 服务"),
   CAUSE_MCP_ACTOR_EMAIL: z.string().email().default("mcp-service@cause.local"),
+  /** Optional ID of the registered source trusted by this MCP service for exact reports. */
+  CAUSE_MCP_GOOGLE_ADS_REPORT_SOURCE_ID: z.string().trim().min(1).optional(),
   /** 单个 HTTP 请求超时：深度研究最长约 10 分钟，默认 15 分钟 */
   CAUSE_MCP_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(60_000).default(900_000),
 });

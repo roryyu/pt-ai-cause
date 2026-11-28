@@ -71,6 +71,20 @@ dsh 主 agent ── run_cause_task ──> dsh-cause 插件 ── 启动子 ag
 
 图表和表格全量数据落库。默认只返回图表及表格数量。数据分析调用可传 `includeDailyChart: true`，复用本次生成的日期折线图或柱状图，从相同查询表格核对每个数值后返回 `dailyChart`。只投影一张图、最多 31 个日期和两个序列。不支持的计量格式或无法核对的图表省略，正文照常返回。这一步不发起新查询或模型调用。
 
+#### Google Ads 明确日期报表
+
+在现有 `ask` 上可传 `googleAdsReport: {customerId, campaignId, startDate, endDate}`。保留必填的 `question`。使用去连字符的 Google 客户号和单一系列编号。日期为 `YYYY-MM-DD`，以广告账户时区为准，首尾包含，最多 366 天。此分支可同时使用 `includeDailyChart`，禁止一并指定 `responseSchema`、`dataSourceIds`、`workspaceId` 或 `parentQuestionId`。已有 `responseSchema` 和 `structured.rows` 原样供 Decision 等调用方使用。
+
+由服务管理员设置 `CAUSE_MCP_GOOGLE_ADS_REPORT_SOURCE_ID` 绑定一个已注册的 Google Ads 数据源。启用前核对该 MCP 服务的调用方及账户授权。连接器从绑定中读取客户和经理账户配置，入参客户 ID 必须匹配。没有配置或不匹配时通过 `ASK_FAILED` 返回，且不会查询 Google。
+
+沿用问答记录和 Google Ads 只读报表模板。结果增加 `googleAdsReport`，包含 `scope`（原四项）、`currency`（ISO 币种）、`timeZone`（账户时区）和 `status`。
+
+- `complete` 附 `totals: {spendMicros, impressions, clicks}`，均为十进制整数字符串，花费以账户币种微单位累加。
+- `empty` 表示该范围成功返回零条记录。
+- `incomplete` 表示数据分页或字段不齐，省略总计。账户或报表范围无法核对、上游失败和超时走 `ASK_FAILED`。
+
+明细随原问答落库。指定 `includeDailyChart` 时，从同次完整结果投影 2 至 31 天的花费趋势，沿用 `dailyChart` 格式。同时返回可选的 `googleAdsDaily`（`{date, spendMicros, impressions, clicks}[]`），覆盖 1 至 31 天的明确报表范围。计量值使用与总计相同的十进制整数字符串，日期升序且唯一。Google 可能省略零活动日，按原样保留日期缺口。空结果、部分结果或超出展示窗口时省略该字段，完整总计的旧有接口继续适用。该字段复用同次查询，不触发新增调用或数据库迁移。
+
 ### deep_research
 
 入参：`question`（必填，4～2000 字）、`depth`（`standard` 默认 / `deep`）、`sourceQuestionId`（来源问答，其结论注入研究背景）、`workspaceId`。
