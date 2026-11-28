@@ -15,7 +15,7 @@ vi.mock("@/lib/server/auth/session", () => ({ requireBusinessSession: vi.fn().mo
 
 import { prisma } from "@/lib/db";
 import { executeRestRequest, executeGraphQLQuery, testApiSource, type RestRequestInput } from "@/lib/server/connectors/api";
-import { googleAdsSourceConfig, parseGoogleAdsRequest, googleAdsError, serializeGoogleAdsResult } from "@/lib/server/connectors/google-ads";
+import { googleAdsSourceConfig, parseGoogleAdsRequest, readGoogleAdsReport, googleAdsError, serializeGoogleAdsResult } from "@/lib/server/connectors/google-ads";
 import { cachedRestRequest } from "@/lib/server/connectors/api-cache";
 import { createApiSourceTool, externalSourcesSummary } from "@/lib/server/agents/tools";
 import { createRunContext } from "@/lib/server/agents/events";
@@ -288,5 +288,54 @@ describe("缓存、诊断与工作流集成", () => {
     const output = await tool.invoke({ sourceId: source.id, method: "POST", path: "campaigns", body: "{}" });
     expect(JSON.parse(String(output))).toMatchObject({ status: 200, sourceId: source.id, operation: "campaigns" });
     expect(externalSourcesSummary([source])).toContain("不需要 Property ID");
+  });
+});
+
+describe("明确日期实绩回执", () => {
+  const scope = { customerId: cid, campaignId: "42", startDate: "2026-11-20", endDate: "2026-11-26" };
+  const day = (date: string, costMicros: string) => ({
+    campaign: { id: "42" }, segments: { date }, metrics: { costMicros, impressions: "10", clicks: "0" },
+  });
+  const reply = (results: unknown[], nextPageToken?: string) => {
+    sdk.request.mockImplementation(async (opts) => opts.data.query.includes("FROM customer LIMIT")
+      ? mockRequest(opts) : { data: { results, nextPageToken } });
+  };
+
+  it("按已注册的账户和请求日期查询，直接汇总不丢失微单位", async () => {
+    reply([day("2026-11-20", "9007199254740993"), day("2026-11-26", "3")]);
+    await expect(readGoogleAdsReport({ ...config, loginCustomerId: manager }, scope)).resolves.toMatchObject({
+      report: { scope, status: "complete", currency: "USD", timeZone: "Asia/Shanghai",
+        totals: { spendMicros: "9007199254740996", impressions: "20", clicks: "0" } },
+    });
+    const call = sdk.request.mock.calls.at(-1)![0];
+    expect(call.url).toContain(`/customers/${cid}/googleAds:search`);
+    expect(call.headers).toEqual({ "login-customer-id": manager });
+    expect(call.data.query).toContain("campaign.id = 42 AND segments.date BETWEEN '2026-11-20' AND '2026-11-26'");
+  });
+
+  it("不让调用方切换客户", async () => {
+    await expect(readGoogleAdsReport(config, { ...scope, customerId: manager })).rejects.toThrow("未开通");
+    expect(sdk.request).not.toHaveBeenCalled();
+  });
+
+  it("成功零行才为空；分页和缺字段不返回总计", async () => {
+    reply([]);
+    expect((await readGoogleAdsReport(config, scope)).report).toEqual({
+      scope, status: "empty", currency: "USD", timeZone: "Asia/Shanghai",
+    });
+    reply([], "later");
+    expect((await readGoogleAdsReport(config, scope)).report).toEqual({
+      scope, status: "incomplete", currency: "USD", timeZone: "Asia/Shanghai",
+    });
+    reply([{ ...day("2026-11-20", "0"), metrics: { clicks: "0" } }]);
+    expect((await readGoogleAdsReport(config, scope)).report).toMatchObject({ status: "incomplete" });
+  });
+
+  it.each([
+    { ...day("2026-11-20", "1"), campaign: { id: "14" } },
+    day("2026-11-27", "1"),
+  ])("范围不符时拒绝回执", async (row) => {
+    reply([row]);
+    await expect(readGoogleAdsReport(config, scope)).rejects.toThrow("无法核实");
   });
 });

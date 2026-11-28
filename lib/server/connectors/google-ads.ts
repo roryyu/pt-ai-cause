@@ -7,6 +7,24 @@ const API_ROOT = `${GOOGLE_ADS_ENDPOINT}/v26`;
 export const GoogleAdsCustomerIdSchema = z.string().regex(/^\d{10}$/, "Google Ads Customer ID 必须是去掉连字符的 10 位数字");
 const IdSchema = z.string().regex(/^[1-9]\d{0,18}$/, "ID 必须为数字");
 const DateSchema = z.iso.date();
+export const googleAdsReportScopeSchema = z.object({
+  customerId: GoogleAdsCustomerIdSchema, campaignId: IdSchema, startDate: DateSchema, endDate: DateSchema,
+}).strict().refine((value) => validReportRange(value), "日期起止顺序必须正确，单次最多 366 天");
+
+function validReportRange({ startDate, endDate }: { startDate: string; endDate: string }) {
+  return endDate >= startDate && Date.parse(endDate) - Date.parse(startDate) < 366 * 86400000;
+}
+
+export type GoogleAdsReportScope = z.infer<typeof googleAdsReportScopeSchema>;
+type ReportTotals = { spendMicros: string; impressions: string; clicks: string };
+type ReportBase = { scope: GoogleAdsReportScope; currency: string; timeZone: string };
+export type GoogleAdsReport = ReportBase & (
+  | { status: "complete"; totals: ReportTotals }
+  | { status: "empty" | "incomplete" }
+);
+export type ReportDay = ReportTotals & { date: string };
+type VerifiedReport = { report: GoogleAdsReport; days: ReportDay[] };
+
 const InstallResourceSchema = z.string().regex(/^customers\/\d{10}\/conversionActions\/[1-9]\d{0,18}$/);
 export const INSTALL_TYPES = [
   "GOOGLE_PLAY_DOWNLOAD", "FIREBASE_ANDROID_FIRST_OPEN", "FIREBASE_IOS_FIRST_OPEN",
@@ -29,8 +47,7 @@ const ActionSchema = z.discriminatedUnion("action", [
     action: z.literal("report"), ...scopeFields,
     campaignId: IdSchema, startDate: DateSchema, endDate: DateSchema,
     installAction: InstallResourceSchema.optional(),
-  }).strict().refine((v) => v.endDate >= v.startDate &&
-    Date.parse(v.endDate) - Date.parse(v.startDate) < 366 * 86400000,
+  }).strict().refine(validReportRange,
   "日期起止顺序必须正确，单次最多 366 天"),
 ]);
 
@@ -114,7 +131,55 @@ function safeNumber(value: string | number | undefined, integer = false) {
 }
 const text = (value: string | undefined) => (value ?? "").slice(0, 300);
 
-export async function executeGoogleAdsRequest(config: ApiSourceConfig, input: RestRequestInput, parentSignal?: AbortSignal): Promise<ApiCallResult> {
+function verifyReport(base: ReportBase, rows: Row[], hasNextPage: boolean): VerifiedReport {
+  const { scope } = base;
+  const days: ReportDay[] = [];
+  const dates = new Set<string>();
+  let spend = 0n;
+  let impressions = 0n;
+  let clicks = 0n;
+  const incomplete = { report: { ...base, status: "incomplete" as const }, days: [] };
+  if (hasNextPage) return incomplete;
+  for (const row of rows) {
+    const date = row.segments?.date;
+    const values = [row.metrics?.costMicros, row.metrics?.impressions, row.metrics?.clicks];
+    if (!date || !DateSchema.safeParse(date).success || date < scope.startDate || date > scope.endDate
+      || dates.has(date) || row.campaign?.id !== scope.campaignId
+      || !values.every((value) => typeof value === "string" && /^(0|[1-9]\d{0,18})$/.test(value))) {
+      // A response outside the requested scope cannot support even an empty result.
+      if (row.campaign?.id !== scope.campaignId || (date && (date < scope.startDate || date > scope.endDate))) {
+        throw new Error("Google Ads 报表范围无法核对");
+      }
+      return incomplete;
+    }
+    const [cost, views, taps] = values as [string, string, string];
+    dates.add(date);
+    days.push({ date, spendMicros: cost, impressions: views, clicks: taps });
+    spend += BigInt(cost);
+    impressions += BigInt(views);
+    clicks += BigInt(taps);
+  }
+  if (!days.length) return { report: { ...base, status: "empty" }, days };
+  return { report: { ...base, status: "complete", totals: {
+    spendMicros: String(spend), impressions: String(impressions), clicks: String(clicks),
+  } }, days: days.sort((a, b) => a.date.localeCompare(b.date)) };
+}
+
+/** Dedicated MCP projection of the existing connector query, before row conversion or clipping. */
+export async function readGoogleAdsReport(config: ApiSourceConfig, scope: GoogleAdsReportScope): Promise<VerifiedReport> {
+  if (config.protocol !== "google_ads" || config.customerId !== scope.customerId) {
+    throw new Error("当前服务未开通该 Google Ads 报表范围");
+  }
+  const { campaignId, startDate, endDate } = scope;
+  let verified: VerifiedReport | undefined;
+  const response = await executeGoogleAdsRequest(config, {
+    method: "POST", path: "report", body: { campaignId, startDate, endDate },
+  }, undefined, (result) => { verified = result; });
+  if (response.status !== 200 || !verified) throw new Error("本次无法核实 Google Ads 报表，请检查数据源连接及广告账户权限");
+  return verified;
+}
+
+export async function executeGoogleAdsRequest(config: ApiSourceConfig, input: RestRequestInput, parentSignal?: AbortSignal, verifiedReport?: (result: VerifiedReport) => void): Promise<ApiCallResult> {
   const action = parseGoogleAdsRequest(config, input);
   const start = Date.now();
   const base = { contentType: "application/json", truncated: false };
@@ -170,7 +235,22 @@ export async function executeGoogleAdsRequest(config: ApiSourceConfig, input: Re
             if (!installAction) return { ...base, status: 400, elapsedMs: Date.now() - start, body: { error: "所选动作不存在或不是安装/首次打开转化，不能以总转化代替安装量" } };
           }
           const filter = `campaign.id = ${action.campaignId} AND segments.date BETWEEN '${action.startDate}' AND '${action.endDate}'`;
-          const daily = await search(cid, `SELECT campaign.id, campaign.name, campaign.status, segments.date, metrics.impressions, metrics.clicks, metrics.ctr, metrics.cost_micros FROM campaign WHERE ${filter} ORDER BY segments.date LIMIT 367`, login);
+          const dailyQuery = `SELECT campaign.id, campaign.name, campaign.status, segments.date, metrics.impressions, metrics.clicks, metrics.ctr, metrics.cost_micros FROM campaign WHERE ${filter} ORDER BY segments.date LIMIT 367`;
+          if (verifiedReport) {
+            if (account.id !== cid || !account.currencyCode || !/^[A-Z]{3}$/.test(account.currencyCode) || !account.timeZone) {
+              throw new Error("Google Ads 账户范围或元数据无法核对");
+            }
+            new Intl.DateTimeFormat("en", { timeZone: account.timeZone });
+            const scope = { customerId: cid, campaignId: action.campaignId, startDate: action.startDate, endDate: action.endDate };
+            const data = await call<{ results?: Row[]; nextPageToken?: string }>(`customers/${cid}/googleAds:search`, dailyQuery, login);
+            if (!data || typeof data !== "object" || Array.isArray(data)
+              || (Object.hasOwn(data, "results") && !Array.isArray(data.results))) {
+              throw new Error("Google Ads 报表格式无法核对");
+            }
+            verifiedReport(verifyReport({ scope, currency: account.currencyCode, timeZone: account.timeZone }, data.results ?? [], Boolean(data.nextPageToken)));
+            return { ...base, status: 200, elapsedMs: Date.now() - start, body: {} };
+          }
+          const daily = await search(cid, dailyQuery, login);
           const conversions = action.installAction ? await search(cid, `SELECT segments.date, segments.conversion_action, metrics.all_conversions FROM campaign WHERE ${filter} AND segments.conversion_action = '${action.installAction}' ORDER BY segments.date LIMIT 367`, login) : [];
           const dailyMap = new Map(daily.map((r) => [r.segments?.date, r]));
           const installsMap = new Map(conversions.map((r) => [r.segments?.date, safeNumber(r.metrics?.allConversions)]));

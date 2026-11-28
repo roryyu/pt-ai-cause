@@ -17,6 +17,8 @@ const mocks = vi.hoisted(() => ({
   runAgentWorkflow: vi.fn(),
   runDeepResearch: vi.fn(),
   chatCompletion: vi.fn(),
+  readGoogleAdsReport: vi.fn(),
+  resolveDataSource: vi.fn(),
   loadGraph: vi.fn(),
   queryGraph: vi.fn(),
 }));
@@ -27,6 +29,11 @@ vi.mock("@/lib/env", () => ({ env: {} }));
 vi.mock("@/lib/server/agents/supervisor", () => ({ runAgentWorkflow: mocks.runAgentWorkflow }));
 vi.mock("@/lib/server/agents/deep-research", () => ({ runDeepResearch: mocks.runDeepResearch }));
 vi.mock("@/lib/server/model-gateway", () => ({ chatCompletion: mocks.chatCompletion }));
+vi.mock("@/lib/server/connectors/datasources", () => ({ resolveDataSource: mocks.resolveDataSource }));
+vi.mock("@/lib/server/connectors/google-ads", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/server/connectors/google-ads")>(),
+  readGoogleAdsReport: mocks.readGoogleAdsReport,
+}));
 vi.mock("@/lib/server/research-graph/store", () => ({ loadGraph: mocks.loadGraph }));
 vi.mock("@/lib/server/research-graph/query", () => ({ queryGraph: mocks.queryGraph }));
 
@@ -273,6 +280,12 @@ describe("MCP 协议装配 createCauseMcpServer", () => {
     expect(tools.map((t) => t.name).sort()).toEqual(["ask", "deep_research"]);
     const ask = tools.find((t) => t.name === "ask");
     expect(ask?.inputSchema.required).toContain("question");
+    expect(ask?.inputSchema.required).not.toContain("googleAdsReport");
+    expect(ask?.inputSchema.properties).toHaveProperty("responseSchema");
+    expect(ask?.inputSchema.properties).toHaveProperty("googleAdsReport");
+    const research = tools.find((t) => t.name === "deep_research");
+    expect(research?.inputSchema.properties).not.toHaveProperty("googleAdsReport");
+    expect(research?.description).not.toContain("googleAdsReport");
   });
 
   it("tools/call ask 返回 JSON 文本结果", async () => {
@@ -310,6 +323,25 @@ describe("MCP 已核对的日趋势", () => {
   const rows = [{ day: "2026-11-18", conversions: 28 }, { day: "2026-11-19", conversions: 16 }];
   const chart = { type: "bar", title: "广告转化", xKey: "day", yKeys: ["conversions"], data: rows };
   const table = { title: "查询结果", columns: ["day", "conversions"], rows };
+
+  it("明确单日报表从同一次查询返回完整明细和总计，沿用原落库表格", async () => {
+    const scope = { customerId: "1000000001", campaignId: "1", startDate: "2026-11-24", endDate: "2026-11-24" };
+    const totals = { spendMicros: "1182376000", impressions: "25764", clicks: "120" };
+    const report = { scope, timeZone: "Asia/Shanghai", currency: "USD", status: "complete", totals };
+    const days = [{ date: scope.startDate, ...totals }];
+    mocks.resolveDataSource.mockResolvedValue({ type: "api", builtin: false, apiConfig: {} });
+    mocks.readGoogleAdsReport.mockResolvedValue({ report, days });
+    const result = await runAskTask({ question: "单日实际投放数据", googleAdsReport: scope, includeDailyChart: true }, ACTOR, undefined, "sample-source");
+    expect(mocks.readGoogleAdsReport).toHaveBeenCalledTimes(1);
+    expect(mocks.readGoogleAdsReport).toHaveBeenCalledWith({}, scope);
+    expect(mocks.runAgentWorkflow).not.toHaveBeenCalled();
+    expect(result.googleAdsReport).toEqual(report);
+    expect(result.googleAdsDaily).toEqual(days);
+    expect(result.dailyChart).toBeUndefined();
+    expect(mocks.prisma.question.update).toHaveBeenLastCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ answer: expect.objectContaining({ tables: [expect.objectContaining({ rows: days })] }) }),
+    }));
+  });
 
   it("按需从同一次查询表格核对并返回日图", async () => {
     mocks.runAgentWorkflow.mockResolvedValue({
